@@ -1,0 +1,8 @@
+  199  sudo sh -c 'cat > /etc/udev/hwdb.d/99-touchscreen-rotation.hwdb <<EOF
+  200  evdev:input:b*v*p*
+  201   LIBINPUT_CALIBRATION_MATRIX=0 1 0 -1 0 1 0 0 1
+  202  EOF'
+  203  sudo systemd-hwdb update
+  204  sudo udevadm trigger
+  205  sudo reboot
+  206  

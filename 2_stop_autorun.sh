@@ -1,0 +1,1 @@
+systemctl --user stop run_ros_riman.service 

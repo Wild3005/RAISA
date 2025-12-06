@@ -1,0 +1,13 @@
+# Goal (input)
+geometry_msgs/Pose2D target
+
+---
+# Result (ketika selesai)
+bool success
+string message
+
+---
+# Feedback (periodic)
+float32 progress_percent
+int8 state          # 0 idle, 1 running, 2 blocked, 3 error
+string current_task

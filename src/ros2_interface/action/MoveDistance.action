@@ -1,0 +1,9 @@
+float32 distance_cm
+int32 direction      # 0 forward, 1 backward
+float32 speed_mps
+---
+bool success
+string message
+---
+float32 traveled_cm
+float32 progress_percent

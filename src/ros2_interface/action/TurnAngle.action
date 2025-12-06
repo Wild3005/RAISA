@@ -1,0 +1,9 @@
+float32 angle_deg
+int32 direction      # 0 left 1 right
+float32 speed_rads
+---
+bool success
+string message
+---
+float32 turned_deg
+float32 progress_percent

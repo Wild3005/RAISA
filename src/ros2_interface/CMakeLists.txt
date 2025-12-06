@@ -1,0 +1,35 @@
+cmake_minimum_required(VERSION 3.8)
+project(ros2_interface)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/NavigateToPose.action"
+  "action/NavigateToPointName.action"
+  "action/MoveDistance.action"
+  "action/TurnAngle.action"
+
+  "srv/SetMode.srv"
+  "srv/SaveMap.srv"
+  "srv/ApplyMap.srv"
+  "srv/RelocalizeAbsolute.srv"
+  "srv/SetMaxSpeed.srv"
+  "srv/Charge.srv"
+
+  "msg/Robot.msg"
+
+  DEPENDENCIES
+  geometry_msgs
+  std_msgs
+)
+
+ament_export_dependencies(rosidl_default_runtime)
+
+ament_package()

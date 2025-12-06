@@ -1,0 +1,5 @@
+int8 type     # true = go charge, false = stop charge
+string charge_point  # optional
+---
+bool success
+string message
