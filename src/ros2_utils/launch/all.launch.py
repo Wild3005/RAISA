@@ -38,12 +38,20 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.125",
+                "reeman_ros_ip": "10.7.101.167",
                 "min_request_period_speed_ms": 600,
                 "polling_period_ms": 300,
 
             },
         ],
+        output='screen',
+        respawn=True,
+    )
+
+    pozyx_node = Node(
+        package='pozyx',
+        executable='uwb_pub',
+        name='uwb_pub',
         output='screen',
         respawn=True,
     )
@@ -125,7 +133,7 @@ def generate_launch_description():
         output='screen',
         respawn=True,
         parameters=[
-            {"camera_path": "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB2.0_HD_UVC_WebCam-video-index0"},
+            {"camera_path": "/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_3BD7DCCF-video-index0"},
         ],  
     )
 
@@ -148,7 +156,7 @@ def generate_launch_description():
     face_detection = Node(
         package='vision',
         executable='face_detection.py',
-        name='face_detection',
+        name='face_detection', 
         output='screen',
         respawn=True,
     )
@@ -170,7 +178,7 @@ def generate_launch_description():
             # face_detection,
 
             # telemetry,
-
+            pozyx_node,
             master,
 
             # keyboard_input,

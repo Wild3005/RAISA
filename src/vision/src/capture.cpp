@@ -40,7 +40,7 @@ public:
 
         // verify what actually got applied
         double actual_width = cap_.get(cv::CAP_PROP_FRAME_WIDTH);
-        double actual_height = cap_.get(cv::CAP_PROP_FRAME_HEIGHT);
+        double actual_height = cap_.get(cv::CAP_PROP_FRAME_HEIGHT); //
         double actual_fps = cap_.get(cv::CAP_PROP_FPS);
 
         if (!cap_.isOpened())

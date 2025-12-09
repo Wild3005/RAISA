@@ -9,6 +9,8 @@
 #include <std_msgs/msg/string.hpp>
 #include <nlohmann/json.hpp>
 
+#include <cmath>
+
 // ALIAS
 using json = nlohmann::json;
 
@@ -16,6 +18,7 @@ using namespace std::chrono_literals;
 
 #define GOTO 0
 #define VEL 1
+#define TEST_UWB 2
 
 typedef struct
 {
@@ -39,6 +42,13 @@ typedef struct
 
 } robot_t;
 
+typedef struct
+{
+    float pose_x;
+    float pose_y;
+    float pose_theta;
+} pose2d_t;
+
 class MasterNode : public rclcpp::Node
 {
 public:
@@ -58,6 +68,7 @@ public:
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_status;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_ui_button_control;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_ui_keyboard_control;
+    rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr sub_uwb_pose2d;
 
     // Timer
     rclcpp::TimerBase::SharedPtr timer_;
@@ -77,6 +88,11 @@ public:
 
     // VAL NAV STATUS
     int res;
+
+    // UWB Pose
+    pose2d_t uwb_pose;
+    pose2d_t uwb_pose_offset;
+    const float offset_meter = 1.2; // 20 cm
 
     // ============================= Robot Command =============================
     std::string last_robot_command = "";
@@ -123,12 +139,16 @@ public:
             "/ui_control", 1, std::bind(&MasterNode::callbackUIButtonControl, this, std::placeholders::_1), node_options);
         sub_ui_keyboard_control = this->create_subscription<std_msgs::msg::String>(
             "/ui_keyboard_control", 1, bind(&MasterNode::callbackUIKeyboardControl, this, std::placeholders::_1), node_options);
+        sub_uwb_pose2d = this->create_subscription<geometry_msgs::msg::Pose2D>(
+            "/uwb_pose2d", 1, std::bind(&MasterNode::callbackUwbPose2D, this, std::placeholders::_1), node_options);
+
+        fsm_robot.value = TEST_UWB;
 
         // -----------------------------
         // Optional periodic behavior
         // -----------------------------
-        // timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
-        keyboard_command_timer_ = this->create_wall_timer(400ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
+        timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
+        // keyboard_command_timer_ = this->create_wall_timer(300ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
     }
 
     // ============================================================
@@ -183,6 +203,11 @@ public:
     {
         // RCLCPP_INFO(this->get_logger(), "Keyboard command: %s", msg->data.c_str());
         last_robot_command = msg->data;
+
+        if (msg->data == "stop" || msg->data == "x")
+        {
+            sendVelocity(0.0, 0.0);
+        }
     }
 
     void callbackUIButtonControl(const std_msgs::msg::Int8::SharedPtr msg)
@@ -273,11 +298,22 @@ public:
         // Implement button control logic here
     }
 
+    void callbackUwbPose2D(const geometry_msgs::msg::Pose2D::SharedPtr msg)
+    {
+        // Update robot pose based on UWB data
+        uwb_pose.pose_x = msg->x;
+        uwb_pose.pose_y = msg->y;
+        uwb_pose.pose_theta = msg->theta;
+        RCLCPP_DEBUG(this->get_logger(), "UWB Pose updated: (%.2f, %.2f, %.2f)", msg->x, msg->y, msg->theta);
+    }
+
     // ============================================================
     // TIMER ROUTINE
     // ============================================================
     void timerRoutine()
     {
+        fsm_robot.value = TEST_UWB;
+
         // Example decision-making logic
         if (battery_ > 0 && battery_ < 20)
         {
@@ -323,7 +359,12 @@ public:
                 fsm_robot.value = GOTO;
             }
             break;
-        
+        case TEST_UWB:
+            get_uwb_pose_offset();
+            move_to_uwb_offset();
+            logger.info("UWB Pose: %.2f, %.2f, %.2f | %.2f %.2f %.2f", uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose_offset.pose_theta, robot.pose_x, robot.pose_y, robot.pose_theta);
+            break;
+
         default:
             break;
         }
@@ -376,6 +417,16 @@ public:
 
     void goTo(float x, float y, float th)
     {
+        static float prev_x = x;
+        static float prev_y = y;
+        static float prev_th = th;
+
+        if (fabs(prev_x - x) < 0.5 && fabs(prev_y - y) < 0.5 && fabs(prev_th - th) < 0.25)
+        {
+            logger.debug("goTo command to (%.2f, %.2f, %.2f) is same as previous. Skipping publish.", x, y, th);
+            return;
+        }
+
         geometry_msgs::msg::Pose2D msg;
         msg.x = x;
         msg.y = y;
@@ -388,6 +439,49 @@ public:
         std_msgs::msg::Int8 msg;
         msg.data = 1;
         pub_cmd_cancel_nav_->publish(msg);
+    }
+
+    // ============================================================
+    // Motion Control Methods (optional)
+    // ============================================================
+    void get_uwb_pose_offset()
+    {
+        float dx = robot.pose_x - uwb_pose.pose_x;
+        float dy = robot.pose_y - uwb_pose.pose_y;
+
+        float dist = std::sqrt(dx * dx + dy * dy);
+
+        if (dist < 1e-3)
+        {
+            return;
+        }
+        else
+        {
+            float ux = dx / dist;
+            float uy = dy / dist;
+
+            uwb_pose_offset.pose_x = uwb_pose.pose_x + ux * offset_meter;
+            uwb_pose_offset.pose_y = uwb_pose.pose_y + uy * offset_meter;
+        }
+
+        uwb_pose_offset.pose_theta = std::atan2(uwb_pose.pose_y - uwb_pose_offset.pose_y, uwb_pose.pose_x - uwb_pose_offset.pose_x);
+    }
+
+    void move_to_uwb_offset()
+    {
+        float error_angle = uwb_pose_offset.pose_theta - robot.pose_theta;
+
+        while (error_angle > M_PI)
+            error_angle -= 2 * M_PI;
+        while (error_angle < -M_PI)
+            error_angle += 2 * M_PI;
+
+        if (abs(error_angle) > 0.1)
+        {
+            // sendVelocity(0.0, 0.5);
+            goTo(robot.pose_x, robot.pose_y, uwb_pose_offset.pose_theta);
+        }
+        logger.info("Angle Error: %.2f", abs(error_angle));
     }
 };
 
