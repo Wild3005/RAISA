@@ -12,6 +12,7 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include "ros2_interface/msg/robot.hpp"
+#include "ros2_utils/simple_fsm.hpp"
 
 #include <thread>
 #include <mutex>
@@ -29,6 +30,12 @@ typedef struct
 
     float vel_linear;
     float vel_angular;
+
+    int8_t nav_status_res;
+    int8_t nav_status_reason;
+    std::string nav_status_goal;
+    float nav_status_dist;
+    float nav_status_mileage;
 
     int8_t mode;
     int8_t battery_level;
@@ -248,6 +255,7 @@ public:
                 auto now = std::chrono::steady_clock::now();
                 if (now - last_speed_post_ >= min_interval)
                 {
+                    // bool ok = reeman_->sendSlowSpeed(cmd.linear.x, cmd.angular.z);
                     bool ok = reeman_->sendSpeed(cmd.linear.x, cmd.angular.z);
                     last_speed_post_ = now;
 
@@ -267,8 +275,8 @@ public:
     void pollingTimerCallback()
     {
         publishRobotInfo();
-        publishNavStatus();
-        // publishLaserScan();
+        // publishNavStatus();
+        publishLaserScan();
         // publishMapName();
     }
 
@@ -312,13 +320,31 @@ public:
         }
     }
 
+    void getNavStatus()
+    {
+        if (auto nav_status = reeman_->getNavStatus())
+        {
+            robot.nav_status_res = (*nav_status)["res"];
+            robot.nav_status_reason = (*nav_status)["reason"];
+            robot.nav_status_goal = (*nav_status)["goal"];
+            robot.nav_status_dist = (*nav_status)["dist"];
+            robot.nav_status_mileage = (*nav_status)["mileage"];
+        }
+    }
+
     void publishRobotInfo()
     {
         // Update robot state
         getPose();
+        std::this_thread::sleep_for(10ms);
         getBattery();
+        std::this_thread::sleep_for(10ms);
         getMode();
+        std::this_thread::sleep_for(10ms);
         getVelocity();
+        std::this_thread::sleep_for(10ms);
+        getNavStatus();
+        std::this_thread::sleep_for(10ms);
 
         // Publish robot state
         ros2_interface::msg::Robot robot_msg;
@@ -332,6 +358,11 @@ public:
         robot_msg.battery_level = robot.battery_level;
         robot_msg.charge_flag = robot.charge_flag;
         robot_msg.emergency_flag = robot.emergency_flag;
+        robot_msg.nav_status_res = robot.nav_status_res;
+        robot_msg.nav_status_reason = robot.nav_status_reason;
+        robot_msg.nav_status_goal = robot.nav_status_goal;
+        robot_msg.nav_status_dist = robot.nav_status_dist;
+        robot_msg.nav_status_mileage = robot.nav_status_mileage;
 
         pub_robot_info_->publish(robot_msg);
     }

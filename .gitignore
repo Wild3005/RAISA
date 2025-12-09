@@ -2,3 +2,9 @@ build/
 install/
 log/
 electron_ui/
+.vscode/
+.DS_Store
+node_modules/
+*.log
+*.tmp
+.env

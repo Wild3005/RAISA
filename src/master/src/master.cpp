@@ -4,6 +4,7 @@
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include "ros2_utils/simple_fsm.hpp"
+#include "ros2_utils/help_logger.hpp"
 #include "ros2_interface/msg/robot.hpp"
 #include <std_msgs/msg/string.hpp>
 #include <nlohmann/json.hpp>
@@ -16,9 +17,34 @@ using namespace std::chrono_literals;
 #define GOTO 0
 #define VEL 1
 
+typedef struct
+{
+    float pose_x;
+    float pose_y;
+    float pose_theta;
+
+    float vel_linear;
+    float vel_angular;
+
+    int8_t nav_status_res;
+    int8_t nav_status_reason;
+    std::string nav_status_goal;
+    float nav_status_dist;
+    float nav_status_mileage;
+
+    int8_t mode;
+    int8_t battery_level;
+    int8_t charge_flag;
+    int8_t emergency_flag;
+
+} robot_t;
+
 class MasterNode : public rclcpp::Node
 {
 public:
+    // ============================= ROS2 Utils =============================
+    HelpLogger logger;
+
     // Publishers
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_cmd_nav_;
@@ -30,9 +56,12 @@ public:
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_robot_battery_;
     rclcpp::Subscription<ros2_interface::msg::Robot>::SharedPtr sub_robot_info;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_status;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_ui_button_control;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_ui_keyboard_control;
 
     // Timer
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr keyboard_command_timer_;
 
     // Internal state tracking
     geometry_msgs::msg::Pose2D last_pose_;
@@ -41,21 +70,34 @@ public:
 
     MachineState fsm_robot;
 
-    ros2_interface::msg::Robot Robot_Info;
-
-    //Temp Val glob
+    // Temp Val glob
     int count_step = 0;
     json json_msg;
     bool sudahterkitim = 0;
 
-
     // VAL NAV STATUS
     int res;
-    
+
+    // ============================= Robot Command =============================
+    std::string last_robot_command = "";
+
+    robot_t robot;
 
     MasterNode() : Node("master")
     {
         RCLCPP_INFO(this->get_logger(), "MasterNode initialized.");
+
+        if (!logger.init())
+        {
+            RCLCPP_ERROR(this->get_logger(), "Failed to initialize HelpLogger.");
+        }
+
+        // -----------------------------
+        // Options for callback groups
+        // -----------------------------
+        auto cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+        rclcpp::SubscriptionOptions node_options;
+        node_options.callback_group = cb_group_;
 
         // -----------------------------
         // Publishers
@@ -67,25 +109,26 @@ public:
         // -----------------------------
         // Subscribers
         // -----------------------------
-        sub_robot_pose_ = this->create_subscription<geometry_msgs::msg::Pose2D>(
-            "reeman/pose", 1, std::bind(&MasterNode::callbackRobotPose, this, std::placeholders::_1));
-
-        sub_robot_mode_ = this->create_subscription<std_msgs::msg::Int8>(
-            "reeman/mode", 1, std::bind(&MasterNode::callbackRobotMode, this, std::placeholders::_1));
-
-        sub_robot_battery_ = this->create_subscription<std_msgs::msg::Int8>(
-            "reeman/battery", 1, std::bind(&MasterNode::callbackBattery, this, std::placeholders::_1));
-
+        // sub_robot_pose_ = this->create_subscription<geometry_msgs::msg::Pose2D>(
+        //     "reeman/pose", 1, std::bind(&MasterNode::callbackRobotPose, this, std::placeholders::_1), node_options);
+        // sub_robot_mode_ = this->create_subscription<std_msgs::msg::Int8>(
+        //     "reeman/mode", 1, std::bind(&MasterNode::callbackRobotMode, this, std::placeholders::_1), node_options);
+        // sub_robot_battery_ = this->create_subscription<std_msgs::msg::Int8>(
+        //     "reeman/battery", 1, std::bind(&MasterNode::callbackBattery, this, std::placeholders::_1), node_options);
+        // sub_nav_status = this->create_subscription<std_msgs::msg::String>(
+        //     "reeman/nav_status", 1, std::bind(&MasterNode::statusCallback, this, std::placeholders::_1), node_options);
         sub_robot_info = this->create_subscription<ros2_interface::msg::Robot>(
-            "reeman/robot_info", 1, std::bind(&MasterNode::callbackRobotInfo, this, std::placeholders::_1));
-
-        sub_nav_status = this->create_subscription<std_msgs::msg::String>(
-            "reeman/nav_status", 1, std::bind(&MasterNode::statusCallback, this, std::placeholders::_1));
+            "reeman/robot_info", 1, std::bind(&MasterNode::callbackRobotInfo, this, std::placeholders::_1), node_options);
+        sub_ui_button_control = this->create_subscription<std_msgs::msg::Int8>(
+            "/ui_control", 1, std::bind(&MasterNode::callbackUIButtonControl, this, std::placeholders::_1), node_options);
+        sub_ui_keyboard_control = this->create_subscription<std_msgs::msg::String>(
+            "/ui_keyboard_control", 1, bind(&MasterNode::callbackUIKeyboardControl, this, std::placeholders::_1), node_options);
 
         // -----------------------------
         // Optional periodic behavior
         // -----------------------------
-        timer_ = this->create_wall_timer(1000ms, std::bind(&MasterNode::timerRoutine, this));
+        // timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
+        keyboard_command_timer_ = this->create_wall_timer(400ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
     }
 
     // ============================================================
@@ -100,7 +143,20 @@ public:
 
     void callbackRobotInfo(const ros2_interface::msg::Robot::SharedPtr msg)
     {
-        Robot_Info = *msg;
+        robot.pose_x = msg->pose_x;
+        robot.pose_y = msg->pose_y;
+        robot.pose_theta = msg->pose_theta;
+        robot.vel_linear = msg->vel_linear;
+        robot.vel_angular = msg->vel_angular;
+        robot.nav_status_res = msg->nav_status_res;
+        robot.nav_status_reason = msg->nav_status_reason;
+        robot.nav_status_goal = msg->nav_status_goal;
+        robot.nav_status_dist = msg->nav_status_dist;
+        robot.nav_status_mileage = msg->nav_status_mileage;
+        robot.mode = msg->mode;
+        robot.battery_level = msg->battery_level;
+        robot.charge_flag = msg->charge_flag;
+        robot.emergency_flag = msg->emergency_flag;
     }
 
     void callbackRobotPose(const geometry_msgs::msg::Pose2D::SharedPtr msg)
@@ -121,6 +177,100 @@ public:
         {
             RCLCPP_WARN(this->get_logger(), "Battery low (%d%%)", battery_);
         }
+    }
+
+    void callbackUIKeyboardControl(const std_msgs::msg::String::SharedPtr msg)
+    {
+        // RCLCPP_INFO(this->get_logger(), "Keyboard command: %s", msg->data.c_str());
+        last_robot_command = msg->data;
+    }
+
+    void callbackUIButtonControl(const std_msgs::msg::Int8::SharedPtr msg)
+    {
+        int button_id = msg->data;
+
+        switch (button_id)
+        {
+        case 1:
+            RCLCPP_INFO(this->get_logger(), "Button 1 pressed.");
+            sendVelocity(0.0, 0.5);
+            break;
+        case 2:
+            RCLCPP_INFO(this->get_logger(), "Button 2 pressed.");
+            // Implement button 2 logic here
+            sendVelocity(0.0, -0.5);
+            break;
+        case 3:
+            RCLCPP_INFO(this->get_logger(), "Button 3 pressed.");
+            sendVelocity(1.0, 1.0);
+            break;
+        case 4:
+        {
+            cancelNav();
+            std::this_thread::sleep_for(100ms);
+
+            // Example: Navigate to a predefined point
+            RCLCPP_INFO(this->get_logger(), "Button 4 pressed. Navigating to front of robot.");
+
+            float x = robot.pose_x;
+            float y = robot.pose_y;
+            float yaw = robot.pose_theta;
+            float d = 1.5; // jarak ke depan (meter)
+
+            float x_front = x + d * std::cos(yaw);
+            float y_front = y + d * std::sin(yaw);
+
+            goTo(x_front, y_front, yaw);
+
+            break;
+        }
+        case 5:
+            RCLCPP_INFO(this->get_logger(), "Button 5 pressed. Canceling navigation.");
+            cancelNav();
+            std::this_thread::sleep_for(100ms);
+            break;
+        case 6:
+            RCLCPP_INFO(this->get_logger(), "Button 6 pressed.");
+            // Implement button 6 logic here
+            break;
+        case 7:
+            RCLCPP_INFO(this->get_logger(), "Button 7 pressed.");
+            // Implement button 7 logic here
+            break;
+        case 8:
+            RCLCPP_INFO(this->get_logger(), "Button 8 pressed.");
+            // Implement button 8 logic here
+            break;
+        case 9:
+            RCLCPP_INFO(this->get_logger(), "Button 9 pressed.");
+            // Implement button 9 logic here
+            sendVelocity(0.0, 0.2);
+            std::this_thread::sleep_for(50ms);
+            sendVelocity(0.0, 0.0);
+            break;
+        case 10:
+            RCLCPP_INFO(this->get_logger(), "Button 10 pressed.");
+            // Implement button 10 logic here
+            sendVelocity(0.0, 0.5);
+
+            break;
+        case 11:
+            RCLCPP_INFO(this->get_logger(), "Button 11 pressed.");
+            // Implement button 11 logic here
+            sendVelocity(0.0, 0.05);
+            break;
+        case 12:
+            RCLCPP_INFO(this->get_logger(), "Button 12 pressed.");
+            // Implement button 12 logic here
+            sendVelocity(4.0, 0.0);
+
+            break;
+        default:
+            RCLCPP_WARN(this->get_logger(), "Unknown button ID: %d", button_id);
+            break;
+        }
+
+        // Implement button control logic here
     }
 
     // ============================================================
@@ -179,11 +329,44 @@ public:
         }
     }
 
+    void keyboardCommandRoutine()
+    {
+        if (last_robot_command != "clear" && last_robot_command != "")
+        {
+            if (last_robot_command == "forward" || last_robot_command == "w")
+            {
+                sendVelocity(0.5, 0.0);
+            }
+            else if (last_robot_command == "backward" || last_robot_command == "s")
+            {
+                sendVelocity(-0.5, 0.0);
+            }
+            else if (last_robot_command == "left" || last_robot_command == "a")
+            {
+                sendVelocity(0.0, 0.5);
+            }
+            else if (last_robot_command == "right" || last_robot_command == "d")
+            {
+                sendVelocity(0.0, -0.5);
+            }
+            else if (last_robot_command == "stop" || last_robot_command == " ")
+            {
+                sendVelocity(0.0, 0.0);
+            }
+            logger.info("Last Command: %s", last_robot_command.c_str());
+        }
+
+        // ==============================
+
+        // Clear the command after processing
+        last_robot_command = "clear";
+    }
+
     // ============================================================
     // MANUAL COMMAND METHODS (optional)
     // ============================================================
 
-    void sendVelocity(double vx, double wz) // m/s, rad/s
+    void sendVelocity(float vx, float wz) // m/s, rad/s
     {
         geometry_msgs::msg::Twist msg;
         msg.linear.x = vx;
@@ -191,7 +374,7 @@ public:
         pub_cmd_vel_->publish(msg);
     }
 
-    void goTo(double x, double y, double th)
+    void goTo(float x, float y, float th)
     {
         geometry_msgs::msg::Pose2D msg;
         msg.x = x;

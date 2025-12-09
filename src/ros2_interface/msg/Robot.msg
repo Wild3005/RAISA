@@ -11,4 +11,8 @@ int8 battery_level   # percentage 0-100
 int8 charge_flag 
 int8 emergency_flag
 
-
+int8 nav_status_res
+int8 nav_status_reason
+string nav_status_goal
+float32 nav_status_dist
+float32 nav_status_mileage

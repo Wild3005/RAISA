@@ -7,11 +7,11 @@
       },
       "includePath": [
         "/opt/ros/humble/include/**",
-        "/home/ichbinwil/kode_kuliah/RAISA/src/communication/include/**",
-        "/home/ichbinwil/kode_kuliah/RAISA/src/hardware/include/**",
-        "/home/ichbinwil/kode_kuliah/RAISA/src/master/include/**",
-        "/home/ichbinwil/kode_kuliah/RAISA/src/ros2_utils/include/**",
-        "/home/ichbinwil/kode_kuliah/RAISA/src/world_model/include/**",
+        "/home/navis/ROBOTIKA/RAISA/src/communication/include/**",
+        "/home/navis/ROBOTIKA/RAISA/src/hardware/include/**",
+        "/home/navis/ROBOTIKA/RAISA/src/master/include/**",
+        "/home/navis/ROBOTIKA/RAISA/src/ros2_utils/include/**",
+        "/home/navis/ROBOTIKA/RAISA/src/world_model/include/**",
         "/usr/include/**"
       ],
       "name": "ros2",
