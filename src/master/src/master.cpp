@@ -40,6 +40,8 @@ typedef struct
     int8_t charge_flag;
     int8_t emergency_flag;
 
+    int8_t is_moving;
+
 } robot_t;
 
 typedef struct
@@ -59,6 +61,8 @@ public:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_cmd_nav_;
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_cmd_cancel_nav_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_get_pose_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_get_nav_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr sub_robot_pose_;
@@ -121,6 +125,8 @@ public:
         pub_cmd_vel_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd/vel", 1);
         pub_cmd_nav_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/cmd/nav", 1);
         pub_cmd_cancel_nav_ = this->create_publisher<std_msgs::msg::Int8>("/cmd/cancel_nav", 1);
+        pub_get_pose_ = this->create_publisher<std_msgs::msg::Int8>("/get/pose", 1);
+        pub_get_nav_ = this->create_publisher<std_msgs::msg::Int8>("/get/nav", 1);
 
         // -----------------------------
         // Subscribers
@@ -147,7 +153,7 @@ public:
         // -----------------------------
         // Optional periodic behavior
         // -----------------------------
-        timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
+        timer_ = this->create_wall_timer(100ms, std::bind(&MasterNode::timerRoutine, this));
         // keyboard_command_timer_ = this->create_wall_timer(300ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
     }
 
@@ -257,6 +263,8 @@ public:
         case 6:
             RCLCPP_INFO(this->get_logger(), "Button 6 pressed.");
             // Implement button 6 logic here
+            move_to_uwb_offset();
+
             break;
         case 7:
             RCLCPP_INFO(this->get_logger(), "Button 7 pressed.");
@@ -360,9 +368,12 @@ public:
             }
             break;
         case TEST_UWB:
+
             get_uwb_pose_offset();
-            move_to_uwb_offset();
-            logger.info("UWB Pose: %.2f, %.2f, %.2f | %.2f %.2f %.2f", uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose_offset.pose_theta, robot.pose_x, robot.pose_y, robot.pose_theta);
+
+            // move_to_uwb_offset();
+
+            // logger.info("UWB Pose: %.2f, %.2f, %.2f | %.2f %.2f %.2f", uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose_offset.pose_theta, robot.pose_x, robot.pose_y, robot.pose_theta);
             break;
 
         default:
@@ -420,12 +431,30 @@ public:
         static float prev_x = x;
         static float prev_y = y;
         static float prev_th = th;
+        static int8_t prev_res = -1;
 
-        if (fabs(prev_x - x) < 0.5 && fabs(prev_y - y) < 0.5 && fabs(prev_th - th) < 0.25)
+        // logger.info("====== goto x: %.2f", fabs(prev_x - x));
+        // logger.info("====== goto y: %.2f", fabs(prev_y - y));
+        // logger.info("====== goto th: %.2f", fabs(prev_th - th));
+        // logger.info("nav status res: %d | %d", robot.nav_status_res, robot.nav_status_reason);
+
+        if (robot.nav_status_res == 1 || (robot.nav_status_res == 6 && prev_res == 6))
         {
-            logger.debug("goTo command to (%.2f, %.2f, %.2f) is same as previous. Skipping publish.", x, y, th);
-            return;
+            if (fabs(prev_x - x) < 0.5 && fabs(prev_y - y) < 0.5 && fabs(prev_th - th) < 0.3)
+            {
+                logger.info("goTo command to (%.2f, %.2f, %.2f) is same as previous. Skipping publish.", x, y, th);
+
+                prev_x = x;
+                prev_y = y;
+                prev_th = th;
+                return;
+            }
         }
+
+        prev_res = robot.nav_status_res;
+        prev_x = x;
+        prev_y = y;
+        prev_th = th;
 
         geometry_msgs::msg::Pose2D msg;
         msg.x = x;
@@ -444,6 +473,22 @@ public:
     // ============================================================
     // Motion Control Methods (optional)
     // ============================================================
+    void get_robot_pose()
+    {
+        // publish get pose
+        std_msgs::msg::Int8 msg;
+        msg.data = 1;
+        pub_get_pose_->publish(msg);
+    }
+
+    void get_robot_nav()
+    {
+        // publish get nav
+        std_msgs::msg::Int8 msg;
+        msg.data = 1;
+        pub_get_nav_->publish(msg);
+    }
+
     void get_uwb_pose_offset()
     {
         float dx = robot.pose_x - uwb_pose.pose_x;
@@ -469,6 +514,11 @@ public:
 
     void move_to_uwb_offset()
     {
+        get_robot_pose();
+        std::this_thread::sleep_for(10ms);
+        get_robot_nav();
+        std::this_thread::sleep_for(10ms);
+
         float error_angle = uwb_pose_offset.pose_theta - robot.pose_theta;
 
         while (error_angle > M_PI)
@@ -480,6 +530,17 @@ public:
         {
             // sendVelocity(0.0, 0.5);
             goTo(robot.pose_x, robot.pose_y, uwb_pose_offset.pose_theta);
+        }
+        else
+        {
+            if (std::hypot(uwb_pose_offset.pose_x - robot.pose_x, uwb_pose_offset.pose_y - robot.pose_y) > 0.1)
+            {
+                sendVelocity(0.5, 0.0);
+            }
+            else
+            {
+                sendVelocity(0.0, 0.0);
+            }
         }
         logger.info("Angle Error: %.2f", abs(error_angle));
     }

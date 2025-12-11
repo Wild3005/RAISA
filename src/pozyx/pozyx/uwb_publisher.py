@@ -206,7 +206,7 @@ def main():
                 meas = (raw_x, raw_y)
 
                 if kalman is None:
-                    kalman = Kalman2D(meas, 4000, 50000)
+                    kalman = Kalman2D(meas, 4000, 20000)
 
                 kalman.predict(LOOP_DT)
                 kalman.update(meas)

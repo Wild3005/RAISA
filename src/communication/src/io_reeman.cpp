@@ -68,6 +68,8 @@ public:
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_cmd_nav_name_;
     rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr sub_cmd_reloc_;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_cmd_set_mode_;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_get_pose_;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_get_nav_;
 
     // Move / turn
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_move_turn_;
@@ -155,6 +157,12 @@ public:
         sub_cmd_set_mode_ = this->create_subscription<std_msgs::msg::Int8>(
             "/cmd/set_mode", 1, std::bind(&IOReeman::callbackCmdSetMode, this, std::placeholders::_1));
 
+        sub_get_pose_ = this->create_subscription<std_msgs::msg::Int8>(
+            "/get/pose", 1, std::bind(&IOReeman::callbackGetPose, this, std::placeholders::_1));
+
+        sub_get_nav_ = this->create_subscription<std_msgs::msg::Int8>(
+            "/get/nav", 1, std::bind(&IOReeman::callbackGetNav, this, std::placeholders::_1));
+
         // ----------------------------
         // Worker thread to send speed
         // ----------------------------
@@ -165,9 +173,7 @@ public:
         // ----------------------------
         // Polling timer
         // ----------------------------
-        polling_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(polling_period_ms_),
-            std::bind(&IOReeman::pollingTimerCallback, this));
+        polling_timer_ = this->create_wall_timer(std::chrono::milliseconds(polling_period_ms_), std::bind(&IOReeman::pollingTimerCallback, this));
 
         RCLCPP_INFO(this->get_logger(), "IOReeman initialized.");
     }
@@ -274,9 +280,9 @@ public:
     // ---------------------------------------------------------------------
     void pollingTimerCallback()
     {
-        publishRobotInfo();
+        // publishRobotInfo();
         // publishNavStatus();
-        publishLaserScan();
+        // publishLaserScan();
         // publishMapName();
     }
 
@@ -332,7 +338,7 @@ public:
         }
     }
 
-    void publishRobotInfo()
+    void getRobotInfo()
     {
         // Update robot state
         getPose();
@@ -346,25 +352,8 @@ public:
         getNavStatus();
         std::this_thread::sleep_for(10ms);
 
-        // Publish robot state
-        ros2_interface::msg::Robot robot_msg;
-
-        robot_msg.pose_x = robot.pose_x;
-        robot_msg.pose_y = robot.pose_y;
-        robot_msg.pose_theta = robot.pose_theta;
-        robot_msg.vel_linear = robot.vel_linear;
-        robot_msg.vel_angular = robot.vel_angular;
-        robot_msg.mode = robot.mode;
-        robot_msg.battery_level = robot.battery_level;
-        robot_msg.charge_flag = robot.charge_flag;
-        robot_msg.emergency_flag = robot.emergency_flag;
-        robot_msg.nav_status_res = robot.nav_status_res;
-        robot_msg.nav_status_reason = robot.nav_status_reason;
-        robot_msg.nav_status_goal = robot.nav_status_goal;
-        robot_msg.nav_status_dist = robot.nav_status_dist;
-        robot_msg.nav_status_mileage = robot.nav_status_mileage;
-
-        pub_robot_info_->publish(robot_msg);
+        // Publish robot info
+        publishRobotInfo();
     }
 
     void publishNavStatus()
@@ -426,6 +415,50 @@ public:
             output.header.stamp = this->now();
             pub_point_cloud_->publish(output);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Get and Publish
+    // ---------------------------------------------------------------------
+    void callbackGetPose(const std_msgs::msg::Int8::SharedPtr)
+    {
+        getPose();
+        std::this_thread::sleep_for(10ms);
+
+        publishRobotInfo();
+    }
+
+    void callbackGetNav(const std_msgs::msg::Int8::SharedPtr)
+    {
+        getNavStatus();
+        std::this_thread::sleep_for(10ms);
+
+        publishRobotInfo();
+    }
+
+    // ---------------------------------------------------------------------
+    // Publish robot info
+    // ---------------------------------------------------------------------
+    void publishRobotInfo()
+    {
+        ros2_interface::msg::Robot robot_msg;
+
+        robot_msg.pose_x = robot.pose_x;
+        robot_msg.pose_y = robot.pose_y;
+        robot_msg.pose_theta = robot.pose_theta;
+        robot_msg.vel_linear = robot.vel_linear;
+        robot_msg.vel_angular = robot.vel_angular;
+        robot_msg.mode = robot.mode;
+        robot_msg.battery_level = robot.battery_level;
+        robot_msg.charge_flag = robot.charge_flag;
+        robot_msg.emergency_flag = robot.emergency_flag;
+        robot_msg.nav_status_res = robot.nav_status_res;
+        robot_msg.nav_status_reason = robot.nav_status_reason;
+        robot_msg.nav_status_goal = robot.nav_status_goal;
+        robot_msg.nav_status_dist = robot.nav_status_dist;
+        robot_msg.nav_status_mileage = robot.nav_status_mileage;
+
+        pub_robot_info_->publish(robot_msg);
     }
 };
 

@@ -17,7 +17,7 @@ setup(
     maintainer_email='robot@todo.todo',
     description='UWB Pozyx Pose2D Publisher',
     license='MIT',
-    tests_require=['pytest'],
+    # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'uwb_pub = pozyx.uwb_publisher:main',
