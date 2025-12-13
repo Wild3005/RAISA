@@ -205,7 +205,7 @@ def generate_launch_description():
             # lidar_processor,
 
             # telemetry,
-            pozyx_node,
+            # pozyx_node,
             master,
             # keyboard_input,
 

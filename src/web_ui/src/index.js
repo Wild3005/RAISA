@@ -138,3 +138,12 @@ function sendCommandButton(btnId) {
 
     console.log("📤 Sent:", payload.data);
 }
+
+const stdout1 = document.getElementById("stdout1");
+stdout1.src =
+  "http://" +
+  window.location.hostname +
+  ":8080/stream?topic=" +
+  "/vision/pose_frame" +
+  "&quality=10";
+stdout1.alt = "MJPEG Stream";

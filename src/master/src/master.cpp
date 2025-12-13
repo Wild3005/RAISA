@@ -145,7 +145,6 @@ public:
     obstacle_checking_t obstacle_most_right;
 
     // --------------------------
-    // ============================= Person Localization =============================
     std::string vision_person_position_ = "middle"; // most_left, left, middle, right, most_right
     int8_t person_detected_ = 0;
     float person_distance_ = 0.0f;
@@ -220,7 +219,7 @@ public:
         // -----------------------------
         // Optional periodic behavior
         // -----------------------------
-        // timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
+        timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
         // keyboard_command_timer_ = this->create_wall_timer(300ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
         timer_mode_ = this->create_wall_timer(std::chrono::milliseconds(timer_counter_ms_), std::bind(&MasterNode::timerMode, this));
     }
@@ -339,7 +338,6 @@ public:
             logger.info("Button 6 pressed.");
 
             get_lidar_data();
-
             std::this_thread::sleep_for(200ms);
             get_robot_pose();
             std::this_thread::sleep_for(100ms);
@@ -400,6 +398,51 @@ public:
             break;
         case 10:
             logger.info("Button 10 pressed.");
+            {
+                static obstacle_checking_t obs_used;
+
+                if (person_detected_)
+                {
+                    get_lidar_data();
+                    std::this_thread::sleep_for(200ms);
+                    get_lidar_data();
+                    std::this_thread::sleep_for(200ms);
+                    get_robot_pose();
+                    std::this_thread::sleep_for(200ms);
+                    get_robot_pose();
+                    std::this_thread::sleep_for(200ms);
+                    process_lidar();
+                    std::this_thread::sleep_for(200ms);
+
+                    if (obstacle_middle.status && vision_person_position_ == "middle")
+                    {
+                        logger.info("Using obstacle at middle.");
+                        obs_used = obstacle_middle;
+                    }
+                    else if (obstacle_left.status && vision_person_position_ == "left")
+                    {
+                        logger.info("Using obstacle at left.");
+                        obs_used = obstacle_left;
+                    }
+                    else if (obstacle_right.status && vision_person_position_ == "right")
+                    {
+                        logger.info("Using obstacle at right.");
+                        obs_used = obstacle_right;
+                    }
+                    else if (obstacle_most_right.status && vision_person_position_ == "most_right")
+                    {
+                        logger.info("Using obstacle at most right.");
+                        obs_used = obstacle_most_right;
+                    }
+                    else if (obstacle_most_left.status && vision_person_position_ == "most_left")
+                    {
+                        logger.info("Using obstacle at most left.");
+                        obs_used = obstacle_most_left;
+                    }
+
+                    move_to_camera_person(obs_used);
+                }
+            }
 
             break;
         case 11:
@@ -572,7 +615,44 @@ public:
         }
         case MODE_TRACK_CAMERA:
         {
+            static obstacle_checking_t obs_used;
 
+            if (person_detected_)
+            {
+                get_lidar_data();
+                std::this_thread::sleep_for(200ms);
+                get_robot_pose();
+                std::this_thread::sleep_for(100ms);
+                process_lidar();
+                std::this_thread::sleep_for(100ms);
+
+                if (obstacle_middle.status && vision_person_position_ == "middle")
+                {
+                    obs_used = obstacle_middle;
+                }
+                else if (obstacle_left.status && vision_person_position_ == "left")
+                {
+                    obs_used = obstacle_left;
+                }
+                else if (obstacle_right.status && vision_person_position_ == "right")
+                {
+                    obs_used = obstacle_right;
+                }
+                else if (obstacle_most_right.status && vision_person_position_ == "most_right")
+                {
+                    obs_used = obstacle_most_right;
+                }
+                else if (obstacle_most_left.status && vision_person_position_ == "most_left")
+                {
+                    obs_used = obstacle_most_left;
+                }
+                else
+                {
+                    obs_used.status = 0; // no obstacle
+                }
+
+                move_to_camera_person(obs_used);
+            }
             break;
         }
         default:
@@ -582,6 +662,10 @@ public:
 
     void timerRoutine()
     {
+        get_lidar_data();
+        std::this_thread::sleep_for(200ms);
+        get_robot_pose();
+        std::this_thread::sleep_for(200ms);
     }
 
     void keyboardCommandRoutine()
@@ -700,21 +784,48 @@ public:
         float deg_theshold = 30.0f; // degrees
 
         // Only send goTo command if the target position has changed significantly
-        if (std::fabs(uwb_pose_offset.pose_x - prev_x) < 1f &&
-            std::fabs(uwb_pose_offset.pose_y - prev_y) < 1f &&
-            // std::fabs(uwb_pose.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)g
+        if (std::fabs(uwb_pose_offset.pose_x - prev_x) < 1.0f &&
+            std::fabs(uwb_pose_offset.pose_y - prev_y) < 1.0f
+            // && std::fabs(uwb_pose.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)g
         )
         {
+            logger.info("SKIP move");
         }
         else
         {
             goTo(uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose.pose_theta);
         }
+
+        prev_x = uwb_pose_offset.pose_x;
+        prev_y = uwb_pose_offset.pose_y;
+        prev_theta = uwb_pose.pose_theta;
     }
 
-    void move_to_camera_person()
+    void move_to_camera_person(obstacle_checking_t obs_used)
     {
-        goTo(person_global_pose_.pose_x, person_global_pose_.pose_y, 0.0f);
+        pose2d_t target_offset;
+        static float prev_x = target_offset.pose_x;
+        static float prev_y = target_offset.pose_y;
+        static float prev_theta = target_offset.pose_theta;
+
+        target_offset = get_near_obstacle_point(obs_used);
+
+        if (std::fabs(target_offset.pose_x - prev_x) < 1.0f &&
+            std::fabs(target_offset.pose_y - prev_y) < 1.0f
+            // && std::fabs(target_offset.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)
+        )
+        {
+            logger.info("SKIP move");
+        }
+        else
+        {
+
+            goTo(target_offset.pose_x, target_offset.pose_y, target_offset.pose_theta);
+        }
+
+        prev_x = target_offset.pose_x;
+        prev_y = target_offset.pose_y;
+        prev_theta = target_offset.pose_theta;
     }
 
     // Helper: Extract (x, y) points from PointCloud2 message
@@ -890,6 +1001,27 @@ public:
             result.status = 0;
 
         return result;
+    }
+
+    pose2d_t get_near_obstacle_point(obstacle_checking_t obs_used)
+    {
+
+        pose2d_t target_point;
+
+        float d_stop = 1.5f;
+        float dx = obs_used.pos_x - robot.pose_x;
+        float dy = obs_used.pos_y - robot.pose_y;
+        float distance_to_obstacle = sqrtf(dx * dx + dy * dy);
+
+        float scale = (distance_to_obstacle - d_stop) / distance_to_obstacle;
+        target_point.pose_x = robot.pose_x + (dx * scale);
+        target_point.pose_y = robot.pose_y + (dy * scale);
+
+        target_point.pose_theta = atan2f(target_point.pose_y - robot.pose_y, target_point.pose_x - robot.pose_x);
+
+        logger.info("Target Point to near obstacle: (%.2f, %.2f, %.2f)", target_point.pose_x, target_point.pose_y, target_point.pose_theta);
+
+        return target_point;
     }
 };
 
