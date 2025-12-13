@@ -29,8 +29,7 @@ include_directories(
   )
   
   
-add_executable(io_reeman_node
-  src/io_reeman.cpp
+add_executable(io_reeman_node src/io_reeman.cpp
   include/ReemanClient.hpp   # header-only, still include to install properly
 )
 
@@ -38,7 +37,7 @@ target_link_libraries(io_reeman_node
   cpr::cpr
 )
 
-ament_target_dependencies(io_reeman_node
+ament_target_dependencies(io_reeman_node  
   rclcpp
   ros2_interface
   geometry_msgs
@@ -55,8 +54,15 @@ ament_target_dependencies(io_reeman_node
 
 )
 
+add_executable(io_leg_node src/io_leg.cpp)
+
+ament_target_dependencies(io_leg_node rclcpp std_msgs)
+
+
+
 install(TARGETS 
   io_reeman_node
+  io_leg_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

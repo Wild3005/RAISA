@@ -51,6 +51,8 @@ install(
     script/detection.py 
     script/hand_track.py
     script/face_detection.py
+    script/pose_detection.py
+    script/lidar_processor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

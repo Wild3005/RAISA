@@ -9,6 +9,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 
 # ros2_interface (your messages/actions/services)
@@ -21,6 +23,9 @@ add_executable(master src/master.cpp)
 ament_target_dependencies(master
   rclcpp
   rclcpp_action
+  std_msgs
+  geometry_msgs
+  sensor_msgs
   ros2_interface
   ros2_utils
 )

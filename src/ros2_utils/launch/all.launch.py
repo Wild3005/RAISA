@@ -48,6 +48,14 @@ def generate_launch_description():
         respawn=True,
     )
 
+    io_leg_node = Node(
+        package='communication',
+        executable='io_leg_node',
+        name='io_leg_node',
+        output='screen',
+        respawn=True,
+    )
+
     pozyx_node = Node(
         package='pozyx',
         executable='uwb_pub',
@@ -132,6 +140,7 @@ def generate_launch_description():
         name='capture',
         output='screen',
         respawn=True,
+
         parameters=[
             {"camera_path": "/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_3BD7DCCF-video-index0"},
         ],  
@@ -161,6 +170,22 @@ def generate_launch_description():
         respawn=True,
     )
 
+    pose_detection = Node(
+        package='vision',
+        executable='pose_detection.py',
+        name='pose_detection',
+        output='screen',
+        respawn=True,
+    )
+
+    lidar_processor = Node(
+        package='vision',
+        executable='lidar_processor.py',
+        name='lidar_processor',
+        output='screen',
+        respawn=True,
+    )
+
 
     return LaunchDescription(
         [
@@ -173,18 +198,21 @@ def generate_launch_description():
 
             # audio_controller,
             
-            # capture,
+            capture,
             # hand_track,
             # face_detection,
+            pose_detection,
+            # lidar_processor,
 
             # telemetry,
             pozyx_node,
             master,
-
             # keyboard_input,
 
             # wifi_control,
             io_reeman_node,
+            # io_leg_node,
+
             # ds4_driver,
         ]
     )
