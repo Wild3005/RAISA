@@ -1,4 +1,20 @@
+# Build artifacts
+electron_ui/
+
+# VS Code
+.vscode/
+
+# ROS2 build
 build/
 install/
 log/
-electron_ui/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Large / generated files
+*.db
+*.pt
+*.onnx
+*.bin
