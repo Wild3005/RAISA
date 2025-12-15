@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-
-
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose2D
@@ -104,7 +101,7 @@ class Kalman2D:
 # ---------------------------------------------
 def get_position(po,rid):
     pos=Coordinates()
-    ok=po.doPositioning(pos,PozyxConstants.DIMENSION_2D,1000,
+    ok=po.doPositioning(pos,PozyxConstants.DIMENSION_2D,200,
                         PozyxConstants.POSITIONING_ALGORITHM_UWB_ONLY,
                         remote_id=rid)
     return ok==POZYX_SUCCESS,pos

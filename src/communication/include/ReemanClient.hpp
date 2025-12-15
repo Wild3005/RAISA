@@ -6,6 +6,7 @@
 #include "nlohmann_json.hpp"
 #include <cpr/cpr.h>
 #include <rclcpp/rclcpp.hpp>
+#include <iostream>
 
 using json = nlohmann::json;
 
@@ -49,96 +50,108 @@ struct VirtualWallSegment {
 };
 
 // ============================================================
-// ReemanClient (Header-only)
+// ReemanClient
 // ============================================================
 
 class ReemanClient {
-public:
-    explicit ReemanClient(const std::string &host) {
-        baseUrl_ = "http://" + host;
-    }
-
 private:
-    std::string baseUrl_;
+    std::string base_url_;
+    int timeout_ms_ = 5000; // 5 detik timeout
 
     // ============================================================
-    // Internal HTTP GET helper
+    // Internal HTTP GET helper (menggunakan CPR)
     // ============================================================
     std::optional<json> httpGet(const std::string &path) {
+        std::string url = base_url_ + path;
+        
         auto res = cpr::Get(
-            cpr::Url{baseUrl_ + path},
-            cpr::Timeout{3000});
+            cpr::Url{url},
+            cpr::Timeout{timeout_ms_},
+            cpr::ConnectTimeout{3000});
 
         if (res.error) {
-            RCLCPP_WARN(rclcpp::get_logger("ReemanClient"),
-                        "GET %s error: %s",
-                        path.c_str(),
-                        res.error.message.c_str());
+            std::cerr << "[ReemanClient] GET " << path << " error: " 
+                      << res.error.message << std::endl;
             return std::nullopt;
         }
 
         if (res.status_code < 200 || res.status_code >= 300) {
-            RCLCPP_WARN(rclcpp::get_logger("ReemanClient"),
-                        "GET %s HTTP %ld",
-                        path.c_str(),
-                        res.status_code);
+            std::cerr << "[ReemanClient] HTTP " << res.status_code 
+                      << " for " << path << std::endl;
             return std::nullopt;
         }
 
         try {
             return json::parse(res.text);
-        } catch (...) {
-            RCLCPP_ERROR(rclcpp::get_logger("ReemanClient"),
-                         "Invalid JSON GET %s",
-                         path.c_str());
+        } catch (const json::exception& e) {
+            std::cerr << "[ReemanClient] JSON parse error: " << e.what() << std::endl;
             return std::nullopt;
         }
     }
 
     // ============================================================
-    // Internal HTTP POST helper
+    // Internal HTTP POST helper (menggunakan CPR)
     // ============================================================
-    std::optional<json> httpPost(const std::string &path, const json &body) {
+    std::optional<json> httpPost(const std::string &path, const json &data) {
+        std::string url = base_url_ + path;
+        std::string payload = data.dump();
+
         auto res = cpr::Post(
-            cpr::Url{baseUrl_ + path},
-            cpr::Body{body.dump()},
+            cpr::Url{url},
+            cpr::Body{payload},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Timeout{3000});
+            cpr::Timeout{timeout_ms_},
+            cpr::ConnectTimeout{3000});
 
         if (res.error) {
-            RCLCPP_ERROR(rclcpp::get_logger("ReemanClient"),
-                         "POST %s error: %s",
-                         path.c_str(),
-                         res.error.message.c_str());
+            std::cerr << "[ReemanClient] POST " << path << " error: " 
+                      << res.error.message << std::endl;
             return std::nullopt;
         }
 
         if (res.status_code < 200 || res.status_code >= 300) {
-            RCLCPP_WARN(rclcpp::get_logger("ReemanClient"),
-                        "POST %s HTTP %ld",
-                        path.c_str(),
-                        res.status_code);
+            std::cerr << "[ReemanClient] HTTP " << res.status_code 
+                      << " for POST " << path << std::endl;
             return std::nullopt;
         }
 
         try {
             return json::parse(res.text);
-        } catch (...) {
-            RCLCPP_ERROR(rclcpp::get_logger("ReemanClient"),
-                         "Invalid JSON POST %s",
-                         path.c_str());
+        } catch (const json::exception& e) {
+            std::cerr << "[ReemanClient] JSON parse error POST: " << e.what() << std::endl;
             return std::nullopt;
         }
+    }
+
+    bool httpPostSimple(const std::string &path, const json &data) {
+        auto res = httpPost(path, data);
+        return res.has_value();
     }
 
 public:
+    explicit ReemanClient(const std::string &host) {
+        base_url_ = "http://" + host;
+        std::cout << "[ReemanClient] Initialized with base_url: " << base_url_ << std::endl;
+        
+        // Test connection
+        std::cout << "[ReemanClient] Testing connection to " << base_url_ << std::endl;
+        auto test = httpGet("/");
+        if (test) {
+            std::cout << "[ReemanClient] Connection OK!" << std::endl;
+        } else {
+            std::cerr << "[ReemanClient] WARNING: Initial connection test failed" << std::endl;
+        }
+    }
+
+    ~ReemanClient() = default;
+
     // ============================================================
     // SPEED & MOTION
     // ============================================================
 
     bool sendSpeed(float vx, float vth) {
         json body = {{"vx", vx}, {"vth", vth}};
-        return httpPost(EP_POST_SPEED, body).has_value();
+        return httpPostSimple(EP_POST_SPEED, body);
     }
 
     bool moveDistance(float distance_cm, int direction, float speed_mps) {
@@ -146,7 +159,7 @@ public:
             {"distance", distance_cm},
             {"direction", direction},
             {"speed", speed_mps}};
-        return httpPost(EP_POST_MOVE, body).has_value();
+        return httpPostSimple(EP_POST_MOVE, body);
     }
 
     bool turnAngle(float angle_deg, int direction, float speed_rad) {
@@ -154,7 +167,7 @@ public:
             {"angle", angle_deg},
             {"direction", direction},
             {"speed", speed_rad}};
-        return httpPost(EP_POST_TURN, body).has_value();
+        return httpPostSimple(EP_POST_TURN, body);
     }
 
     // ============================================================
@@ -174,21 +187,21 @@ public:
     }
 
     bool cancelNav() {
-        return httpPost(EP_POST_CANCEL_GOAL, json::object()).has_value();
+        return httpPostSimple(EP_POST_CANCEL_GOAL, json::object());
     }
 
     bool relocateAbsolute(float x, float y, float theta_rad) {
         json body = {{"x", x}, {"y", y}, {"theta", theta_rad}};
-        return httpPost(EP_POST_RELOC_ABSOLUTE, body).has_value();
+        return httpPostSimple(EP_POST_RELOC_ABSOLUTE, body);
     }
 
     bool goToChargePoint(const std::string &point = "Charging pile") {
         json body = {{"type", 0}, {"point", point}};
-        return httpPost(EP_POST_CHARGE, body).has_value();
+        return httpPostSimple(EP_POST_CHARGE, body);
     }
 
     // ============================================================
-    // VIRTUAL WALL (NEW)
+    // VIRTUAL WALL
     // ============================================================
 
     bool postVirtualWall(const std::vector<VirtualWallSegment>& segments) {
@@ -201,8 +214,7 @@ public:
             waypoints.push_back({{"pose", pose}});
         }
         json payload = {{"waypoints", waypoints}};
-
-        return httpPost(EP_POST_VIRTUAL_WALL, payload).has_value();
+        return httpPostSimple(EP_POST_VIRTUAL_WALL, payload);
     }
 
     // ============================================================
@@ -229,7 +241,7 @@ public:
     }
 
     std::optional<json> getSpeedState() {
-        return httpGet(EP_GET_SPEED);  // GUNAKAN /reeman/speed BUKAN /reeman/get_speed_state
+        return httpGet(EP_GET_SPEED);
     }
 
     std::optional<json> getNavStatus() {
@@ -254,16 +266,16 @@ public:
 
     bool setMode(int mode) {
         json body = {{"mode", mode}};
-        return httpPost(EP_POST_SET_MODE, body).has_value();
+        return httpPostSimple(EP_POST_SET_MODE, body);
     }
 
     bool saveMap() {
-        return httpPost(EP_POST_SAVE_MAP, json::object()).has_value();
+        return httpPostSimple(EP_POST_SAVE_MAP, json::object());
     }
 
     bool applyMap(const std::string &name) {
         json body = {{"name", name}};
-        return httpPost(EP_POST_APPLY_MAP, body).has_value();
+        return httpPostSimple(EP_POST_APPLY_MAP, body);
     }
 
     std::optional<json> getMapList() {

@@ -35,3 +35,35 @@ var listener = new ROSLIB.Topic({
 listener.subscribe(function (message) {
     console.log("Received message:", message.data);
 });
+
+// Mode Button Topic - WRAP DALAM DOMContentLoaded
+document.addEventListener('DOMContentLoaded', function() {
+    let modeTopic = new ROSLIB.Topic({
+        ros: ros,
+        name: '/button/mode',
+        messageType: 'std_msgs/Int8'
+    });
+
+    const btnInteraction = document.getElementById('btn-interaction');
+    const btnNavigation = document.getElementById('btn-navigation');
+
+    if (btnInteraction) {
+        btnInteraction.addEventListener('click', () => {
+            let msg = new ROSLIB.Message({ data: 0 }); // 0 = Interaksi
+            modeTopic.publish(msg);
+            console.log('Mode: Interaksi');
+        });
+    } else {
+        console.error('btn-interaction not found!');
+    }
+
+    if (btnNavigation) {
+        btnNavigation.addEventListener('click', () => {
+            let msg = new ROSLIB.Message({ data: 1 }); // 1 = Navigasi
+            modeTopic.publish(msg);
+            console.log('Mode: Navigasi');
+        });
+    } else {
+        console.error('btn-navigation not found!');
+    }
+});

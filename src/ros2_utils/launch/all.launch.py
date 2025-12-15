@@ -38,7 +38,7 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.248",
+                "reeman_ros_ip": "10.7.101.250",
                 "min_request_period_speed_ms": 500,
                 "polling_period_ms": 1000,
 

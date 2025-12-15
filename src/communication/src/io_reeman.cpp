@@ -47,7 +47,7 @@ IOReeman() : Node("io_reeman") {
     // pub_robot_mode_ = this->create_publisher<std_msgs::msg::Int8>("/reeman/mode", 1);
     // pub_last_post_status_ = this->create_publisher<std_msgs::msg::Int8>("/reeman/last_post_status", 1);
     // pub_point_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/reeman/point_cloud", 1);
-    // pub_robot_info_ = this->create_publisher<ros2_interface::msg::Robot>("/reeman/robot_info", 1);
+    pub_robot_info_ = this->create_publisher<ros2_interface::msg::Robot>("/reeman/robot_info", 1);
     // pub_laser_ = this->create_publisher<sensor_msgs::msg::LaserScan>("/reeman/laser_scan", 1);
     // pub_map_name_ = this->create_publisher<std_msgs::msg::String>("/reeman/map_name", 1);
     pub_nav_status_ = this->create_publisher<std_msgs::msg::String>("/reeman/nav_status", 1);
@@ -171,6 +171,16 @@ IOReeman() : Node("io_reeman") {
     void callbackCmdReloc(const geometry_msgs::msg::Pose2D::SharedPtr msg) {
         bool ok = reeman_->relocateAbsolute(msg->x, msg->y, msg->theta);
         if (!ok) RCLCPP_WARN(this->get_logger(), "Reloc failed");
+    }
+
+    void publishNavStatus()
+    {
+        if (auto nav_json = reeman_->getNavStatus())
+        {
+            std_msgs::msg::String msg;
+            msg.data = nav_json->dump();
+            pub_nav_status_->publish(msg);
+        }
     }
     
     // Callback Personpos: LANGSUNG queue virtual wall + kirim NAV
@@ -315,6 +325,9 @@ IOReeman() : Node("io_reeman") {
     
     // Polling: SKIP GET jika sering timeout
     void pollingTimerCallback() {
+
+        publishNavStatus();
+
         // Fetch latest robot state dari Reeman API
         if (auto pose = reeman_->getPose()) {
             robot.pose_x = (*pose)["x"];
@@ -356,11 +369,11 @@ IOReeman() : Node("io_reeman") {
             float dy = robot.pose_y - current_goal_.y;
             float dist = std::hypot(dx, dy);
 
-            if (dist < 0.30f) {
-                RCLCPP_INFO(this->get_logger(), "Goal reached (dist=%.2f). Stop.", dist);
-                reeman_->sendSpeed(0.0f, 0.0f);
-                goal_active_ = false;
-            }
+            // if (dist < 0.30f) {
+            //     RCLCPP_INFO(this->get_logger(), "Goal reached (dist=%.2f). Stop.", dist);
+            //     reeman_->sendSpeed(0.0f, 0.0f);
+            //     goal_active_ = false;
+            // }
         }
     }
 
