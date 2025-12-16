@@ -198,6 +198,12 @@ IOReeman() : Node("io_reeman") {
                 pending_segments_ = calculateLineSegments(x, y, yaw, radius, 2.00);
                 pending_vwall_ = true;
             }
+        }else if(current_fsm_state_ == 3 || current_fsm_state_ == 4 || current_fsm_state_ == 5 || current_fsm_state_ == 6 || current_fsm_state_ == 7){
+            {
+                std::lock_guard<std::mutex> lock(vwall_mutex_);
+                pending_segments_ = calculateCircleSegmentsWithDiagonals(x, y, yaw, radius);
+                pending_vwall_ = true;
+            }
         }
         else{
             {
@@ -518,26 +524,39 @@ IOReeman() : Node("io_reeman") {
         return result;
     }
 
-    geometry_msgs::msg::Pose2D calculateGoalCrossBehind(
-        const Point& person, float person_yaw, const Point& robot,
-        float dist_behind)
-    {
-        // Balik arah yaw agar sisi kiri/kanan sesuai harapan
-        float yaw_fixed = -person_yaw;
+    std::vector<VirtualWallSegment> calculateCircleSegmentsWithDiagonals(float cx, float cy, float yaw, float radius) {
+        // Balik arah yaw jika sistem robot menggunakan konvensi berlawanan
+        float yaw_fixed = -yaw;
 
-        geometry_msgs::msg::Pose2D result;
+        std::vector<VirtualWallSegment> segments;
+        float c = std::cos(yaw_fixed);
+        float s = std::sin(yaw_fixed);
 
-        Point behind{
-            person.x - dist_behind * std::cos(yaw_fixed),
-            person.y - dist_behind * std::sin(yaw_fixed)
+        auto rot = [&](float xl, float yl) -> Point {
+            return { cx + c * xl - s * yl,
+                     cy + s * xl + c * yl };
         };
 
-        float yaw_to_person = std::atan2(person.y - behind.y, person.x - behind.x);
+        // Garis utama (tegak lurus)
+        Point p_front = rot( radius, 0.0f);
+        Point p_back  = rot(-radius, 0.0f);
+        Point p_right = rot(0.0f,  radius);
+        Point p_left  = rot(0.0f, -radius);
 
-        result.x = behind.x;
-        result.y = behind.y;
-        result.theta = yaw_to_person;
-        return result;
+        segments.push_back(VirtualWallSegment{ p_back.x,  p_back.y,  p_front.x, p_front.y }); // depan-belakang
+        segments.push_back(VirtualWallSegment{ p_left.x,  p_left.y,  p_right.x, p_right.y }); // kiri-kanan
+
+        // Garis diagonal (dua garis)
+        float d = radius / std::sqrt(2.0f);
+        Point p_d1a = rot( d,  d);
+        Point p_d1b = rot(-d, -d);
+        Point p_d2a = rot( d, -d);
+        Point p_d2b = rot(-d,  d);
+
+        segments.push_back(VirtualWallSegment{ p_d1a.x, p_d1a.y, p_d1b.x, p_d1b.y }); // diagonal 1
+        segments.push_back(VirtualWallSegment{ p_d2a.x, p_d2a.y, p_d2b.x, p_d2b.y }); // diagonal 2
+
+        return segments;
     }
 };
 

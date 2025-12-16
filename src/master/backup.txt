@@ -108,9 +108,14 @@ public:
     // TTC tracking
     double last_ttc_{-1.0};
 
-    // Direction People
+    // TIMEOUT DINAMIS STATIC
     int direction_person_{1}; // 1: SEARAH, 0: MEMOTONG JALAN ORANG, -1: BERLAWANAN ARAH
     bool isStop{0};
+
+        // ===== TAMBAHKAN: Tracking mode dinamis/statis dengan timeout =====
+    int last_motion_state_{-1};  // -1: unknown, 0: statis, 1: dinamis
+    rclcpp::Time last_motion_change_time_;
+    const double DYNAMIC_TO_STATIC_TIMEOUT_ = 1.0;  // 1 detik timeout
 
     MasterNode() : Node("master") {
         RCLCPP_INFO(this->get_logger(), "MasterNode initialized.");
@@ -206,6 +211,8 @@ public:
         // ==========================================================================
         // Inisialisasi start state default
         fsm_robot.value = CASE_SittingApproach;
+        last_motion_state_ = 0;  // mulai dari statis
+        last_motion_change_time_ = this->now();
         // fsm_robot.value = CASE_StandingApproach;
         // ==========================================================================
 
@@ -344,30 +351,54 @@ public:
         RCLCPP_INFO(this->get_logger(),"FSM MODE %d",MODE);
         RCLCPP_INFO(this->get_logger(),"FSM CASE %d",fsm_robot.value);
 
-        // ===== STATEMENT CASE (update fsm_robot.value) ==============================================
-        if(v.vx > 0.1 || v.vy > 0.1){ // PERSON BERGERAK (dinamis)
-            RCLCPP_INFO(this->get_logger(),"CEKK DINAMIS");
+        // ===== STATEMENT CASE dengan TIMEOUT LOGIC ==============================================
+        bool person_moving = isPersonMoving(v);
+
+        // STATIS → DINAMIS: LANGSUNG (tanpa timeout)
+        if (person_moving && last_motion_state_ == 0) {
+            RCLCPP_INFO(this->get_logger(), "STATE CHANGE: STATIS → DINAMIS (immediate)");
+            last_motion_state_ = 1;
+            last_motion_change_time_ = this->now();
+        }
+        // DINAMIS → STATIS: DENGAN TIMEOUT 1 DETIK
+        else if (!person_moving && last_motion_state_ == 1) {
+            if (isDynamicToStaticTimeout()) {
+                RCLCPP_INFO(this->get_logger(), "STATE CHANGE: DINAMIS → STATIS (timeout %.2f s)",
+                    (this->now() - last_motion_change_time_).seconds());
+                last_motion_state_ = 0;
+                last_motion_change_time_ = this->now();
+            } else {
+                double remaining = DYNAMIC_TO_STATIC_TIMEOUT_ - 
+                    (this->now() - last_motion_change_time_).seconds();
+                RCLCPP_INFO(this->get_logger(), "WAITING TIMEOUT: %.2f s remaining", remaining);
+                // Pertahankan state dinamis sampai timeout
+                person_moving = true;
+            }
+        }
+
+        // Logic FSM berdasarkan state akhir
+        if (person_moving) { // PERSON BERGERAK (dinamis)
+            RCLCPP_INFO(this->get_logger(),"CHECK: DINAMIS");
             if(MODE == MODE_INTERACTION){
                 RCLCPP_INFO(this->get_logger(),"PLEASE SWITCH TO NAVIGATION MODE");
-                // ← JANGAN return! lanjut ke mode check
             }
             else{
                 if(direction_person_ == 1){ // SEARAH
                     fsm_robot.value = CASE_EscortMode;
-                    RCLCPP_INFO(this->get_logger(),"CEKK SEARAH");
+                    RCLCPP_INFO(this->get_logger(),"CHECK: SEARAH");
                 }else if(direction_person_ == 0){ // MEMOTONG JALAN ORANG
-                    RCLCPP_INFO(this->get_logger(),"CEKK MEMOTONG JALAN ORANG");
+                    RCLCPP_INFO(this->get_logger(),"CHECK: MEMOTONG JALAN ORANG");
                 }else if(direction_person_ == -1){ // BERLAWANAN ARAH
                     if(isStop){
                         fsm_robot.value = CASE_ActiveYealding; 
                     }else{
                         fsm_robot.value = CASE_StandartPassing;
                     }
-                    RCLCPP_INFO(this->get_logger(),"CEKK BERLAWANAN ARAH");
+                    RCLCPP_INFO(this->get_logger(),"CHECK: BERLAWANAN ARAH");
                 }
             }
         }else{ // PERSON DIAM (statis)
-            RCLCPP_INFO(this->get_logger(),"CEKK STATIS");
+            RCLCPP_INFO(this->get_logger(),"CHECK: STATIS");
             if(MODE == MODE_NAVIGATION){
                 fsm_robot.value = CASE_CrossBehind;
             }else{
@@ -657,13 +688,34 @@ public:
 
     // ======================================================================================
 
+    // ===== HELPER: Cek apakah orang bergerak (velocity threshold) =====
+    bool isPersonMoving(const velocity& v) {
+        return (v.vx > 0.1 || v.vy > 0.1 || v.vx < -0.1 || v.vy < -0.1);
+    }
+
+    // ===== HELPER: Cek timeout dari dinamis ke statis =====
+    bool isDynamicToStaticTimeout() {
+        if (last_motion_state_ != 1) {
+            // Bukan dalam state dinamis, timeout tidak berlaku
+            return false;
+        }
+
+        double elapsed = (this->now() - last_motion_change_time_).seconds();
+        return elapsed >= DYNAMIC_TO_STATIC_TIMEOUT_;
+    }
+
 };
 
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<MasterNode>();
-    RCLCPP_INFO(node->get_logger(), "Master node spinning...");
-    rclcpp::spin(node);
+    RCLCPP_INFO(node->get_logger(), "Master node spinning with MultiThreadedExecutor...");
+    
+    // Gunakan MultiThreadedExecutor untuk callback paralel (UWB tidak terblok)
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
+    
     rclcpp::shutdown();
     return 0;
 }

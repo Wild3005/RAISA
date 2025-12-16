@@ -100,7 +100,13 @@ for (let i = 1; i <= 12; i++) {
     console.log("Generating button " + i);
     const btn = document.createElement("button");
     btn.className = "button is-primary m-2";
-    btn.innerText = "BTN " + i;
+    if( i === 0){
+        btn.innerText = "SIT";
+    }else if( i === 1){
+        btn.innerText = "STAND";
+    }else{
+        btn.innerText = "BTN " + i;
+    }
 
     btn.onclick = () => sendCommandButton(i);
     btn.tabIndex = -1;   // ✅ cegah fokus nempel
