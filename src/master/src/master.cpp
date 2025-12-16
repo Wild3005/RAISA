@@ -79,6 +79,39 @@ struct point2d_t
     float y;
 };
 
+typedef struct
+{
+    float pose_x;
+    float pose_y;
+    float pose_theta;
+
+    float prev_pose_x;
+    float prev_pose_y;
+    float prev_pose_theta;
+
+    float offset_pose_x;
+    float offset_pose_y;
+    float offset_pose_theta;
+
+    float right_pose_x;
+    float right_pose_y;
+    float right_pose_theta;
+
+    float sit_pose_x;
+    float sit_pose_y;
+    float sit_pose_theta;
+
+    float delta_linear;
+    float vel_angular;
+
+    int8_t mode;
+    float distance_to_robot;
+    float angle_to_robot;
+    float angle_movement;
+    float last_angle_movement;
+
+} human_info_t;
+
 class MasterNode : public rclcpp::Node
 {
 public:
@@ -93,6 +126,15 @@ public:
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_get_lidar_;
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_person_global_position_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_person_distance_;
+
+    // publisher for ui web
+    rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_ui_robot_pose2d_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_robot_mode_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_ui_human_pose2d_;
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_ui_human_velocity_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_human_mode_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_robot_fsm_mode_;
+    rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_robot_following_mode_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr sub_robot_pose_;
@@ -112,23 +154,15 @@ public:
     rclcpp::TimerBase::SharedPtr keyboard_command_timer_;
     rclcpp::TimerBase::SharedPtr timer_mode_;
 
-    // Internal state tracking
-    geometry_msgs::msg::Pose2D last_pose_;
-    int robot_mode_ = -1;
-    int battery_ = 100;
-
     MachineState fsm_robot;
     MachineState fsm_mode;
 
-    int timer_counter_ms_ = 5000;
+    int timer_counter_ms_ = 3000;
 
     // Temp Val glob
     int count_step = 0;
     json json_msg;
     bool sudahterkitim = 0;
-
-    // VAL NAV STATUS
-    int res;
 
     // UWB Pose
     pose2d_t uwb_pose;
@@ -155,10 +189,13 @@ public:
     const float LIDAR_MAX_RANGE = 5.0f;               // meters
     const float LIDAR_FRONT_CONE_ANGLE = M_PI / 2.0f; // ±45° front cone
 
+    int8_t is_move_to_human = 0;
+
     // ============================= Robot Command =============================
     std::string last_robot_command = "";
 
     robot_t robot;
+    human_info_t human;
 
     MasterNode() : Node("master")
     {
@@ -186,6 +223,15 @@ public:
         pub_get_lidar_ = this->create_publisher<std_msgs::msg::Int8>("/get/lidar", 1);
         pub_person_global_position_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/person/global_position", 1);
         pub_person_distance_ = this->create_publisher<std_msgs::msg::Float32>("/person/distance", 1);
+
+        // publisher for ui web
+        pub_ui_robot_pose2d_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/ui/robot/pose2d", 1);
+        pub_ui_robot_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/robot/mode", 1);
+        pub_ui_human_pose2d_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/ui/human/pose2d", 1);
+        pub_ui_human_velocity_ = this->create_publisher<geometry_msgs::msg::Twist>("/ui/human/velocity", 1);
+        pub_ui_human_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/human/mode", 1);
+        pub_ui_robot_fsm_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/robot/fsm_mode", 1);
+        pub_ui_robot_following_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/robot/following_mode", 1);
 
         // -----------------------------
         // Subscribers
@@ -219,7 +265,7 @@ public:
         // -----------------------------
         // Optional periodic behavior
         // -----------------------------
-        timer_ = this->create_wall_timer(200ms, std::bind(&MasterNode::timerRoutine, this));
+        timer_ = this->create_wall_timer(500ms, std::bind(&MasterNode::timerRoutine, this));
         // keyboard_command_timer_ = this->create_wall_timer(300ms, std::bind(&MasterNode::keyboardCommandRoutine, this));
         timer_mode_ = this->create_wall_timer(std::chrono::milliseconds(timer_counter_ms_), std::bind(&MasterNode::timerMode, this));
     }
@@ -264,16 +310,16 @@ public:
 
     void callbackRobotMode(const std_msgs::msg::Int8::SharedPtr msg)
     {
-        robot_mode_ = msg->data;
-        RCLCPP_DEBUG(this->get_logger(), "Mode: %d", robot_mode_);
+        robot.mode = msg->data;
+        RCLCPP_DEBUG(this->get_logger(), "Mode: %d", robot.mode);
     }
 
     void callbackBattery(const std_msgs::msg::Int8::SharedPtr msg)
     {
-        battery_ = msg->data;
-        if (battery_ <= 20)
+        robot.battery_level = msg->data;
+        if (robot.battery_level <= 20)
         {
-            RCLCPP_WARN(this->get_logger(), "Battery low (%d%%)", battery_);
+            RCLCPP_WARN(this->get_logger(), "Battery low (%d%%)", robot.battery_level);
         }
     }
 
@@ -292,165 +338,36 @@ public:
     {
         int button_id = msg->data;
 
+        logger.info("Button [ %d ].", button_id);
+
         switch (button_id)
         {
         case 1:
-            RCLCPP_INFO(this->get_logger(), "Button 1 pressed.");
-            sendVelocity(0.0, 0.5);
+            fsm_mode.value = MODE_IDLE;
             break;
         case 2:
-            RCLCPP_INFO(this->get_logger(), "Button 2 pressed.");
-            // Implement button 2 logic here
-            sendVelocity(0.0, -0.5);
-            break;
-        case 3:
-            RCLCPP_INFO(this->get_logger(), "Button 3 pressed.");
-            sendVelocity(1.0, 1.0);
-            break;
-        case 4:
-        {
-            cancelNav();
-            std::this_thread::sleep_for(100ms);
-
-            // Example: Navigate to a predefined point
-            RCLCPP_INFO(this->get_logger(), "Button 4 pressed. Navigating to front of robot.");
-
-            float x = robot.pose_x;
-            float y = robot.pose_y;
-            float yaw = robot.pose_theta;
-            float d = 1.5; // jarak ke depan (meter)
-
-            float x_front = x + d * std::cos(yaw);
-            float y_front = y + d * std::sin(yaw);
-
-            goTo(x_front, y_front, yaw);
-
-            break;
-        }
-        case 5:
-            logger.info("Button 5 pressed.");
-            // cancelNav();
-
-            get_robot_pose();
-
-            break;
-        case 6:
-            logger.info("Button 6 pressed.");
-
-            get_lidar_data();
-            std::this_thread::sleep_for(200ms);
-            get_robot_pose();
-            std::this_thread::sleep_for(100ms);
-
-            process_lidar();
-
-            if (obstacle_middle.status && vision_person_position_ == "middle")
-            {
-                logger.info("Obstacle detected at middle: distance=%.2f m, angle=%.2f rad",
-                            obstacle_middle.distance, obstacle_middle.angle);
-                logger.info("obs x: %.2f m, obs y: %.2f m",
-                            obstacle_middle.pos_x, obstacle_middle.pos_y);
-            }
-            else if (obstacle_left.status && vision_person_position_ == "left")
-            {
-                logger.info("Obstacle detected at left: distance=%.2f m, angle=%.2f rad",
-                            obstacle_left.distance, obstacle_left.angle);
-                logger.info("obs x: %.2f m, obs y: %.2f m",
-                            obstacle_left.pos_x, obstacle_left.pos_y);
-            }
-            else if (obstacle_right.status && vision_person_position_ == "right")
-            {
-                logger.info("Obstacle detected at right: distance=%.2f m, angle=%.2f rad",
-                            obstacle_right.distance, obstacle_right.angle);
-                logger.info("obs x: %.2f m, obs y: %.2f m",
-                            obstacle_right.pos_x, obstacle_right.pos_y);
-            }
-            else if (obstacle_most_right.status && vision_person_position_ == "most_right")
-            {
-                logger.info("Obstacle detected at most right: distance=%.2f m, angle=%.2f rad",
-                            obstacle_most_right.distance, obstacle_most_right.angle);
-                logger.info("obs x: %.2f m, obs y: %.2f m",
-                            obstacle_most_right.pos_x, obstacle_most_right.pos_y);
-            }
-            else if (obstacle_most_left.status && vision_person_position_ == "most_left")
-            {
-                logger.info("Obstacle detected at most left: distance=%.2f m, angle=%.2f rad",
-                            obstacle_most_left.distance, obstacle_most_left.angle);
-                logger.info("obs x: %.2f m, obs y: %.2f m",
-                            obstacle_most_left.pos_x, obstacle_most_left.pos_y);
-            }
-
-            break;
-        case 7:
-            logger.info("Button 7 pressed.");
-            fsm_mode.value = MODE_IDLE;
-
-            break;
-        case 8:
-            logger.info("Button 8 pressed.");
-
             fsm_mode.value = MODE_TRACK_UWB;
             break;
-        case 9:
-            logger.info("Button 9 pressed.");
+        case 3:
             fsm_mode.value = MODE_TRACK_CAMERA;
-
+            break;
+        case 4:
+            break;
+        case 5:
+            break;
+        case 6:
+            break;
+        case 7:
+            break;
+        case 8:
+            break;
+        case 9:
             break;
         case 10:
-            logger.info("Button 10 pressed.");
-            {
-                static obstacle_checking_t obs_used;
-
-                if (person_detected_)
-                {
-                    get_lidar_data();
-                    std::this_thread::sleep_for(200ms);
-                    get_lidar_data();
-                    std::this_thread::sleep_for(200ms);
-                    get_robot_pose();
-                    std::this_thread::sleep_for(200ms);
-                    get_robot_pose();
-                    std::this_thread::sleep_for(200ms);
-                    process_lidar();
-                    std::this_thread::sleep_for(200ms);
-
-                    if (obstacle_middle.status && vision_person_position_ == "middle")
-                    {
-                        logger.info("Using obstacle at middle.");
-                        obs_used = obstacle_middle;
-                    }
-                    else if (obstacle_left.status && vision_person_position_ == "left")
-                    {
-                        logger.info("Using obstacle at left.");
-                        obs_used = obstacle_left;
-                    }
-                    else if (obstacle_right.status && vision_person_position_ == "right")
-                    {
-                        logger.info("Using obstacle at right.");
-                        obs_used = obstacle_right;
-                    }
-                    else if (obstacle_most_right.status && vision_person_position_ == "most_right")
-                    {
-                        logger.info("Using obstacle at most right.");
-                        obs_used = obstacle_most_right;
-                    }
-                    else if (obstacle_most_left.status && vision_person_position_ == "most_left")
-                    {
-                        logger.info("Using obstacle at most left.");
-                        obs_used = obstacle_most_left;
-                    }
-
-                    move_to_camera_person(obs_used);
-                }
-            }
-
             break;
         case 11:
-            logger.info("Button 11 pressed.");
             break;
         case 12:
-            logger.info("Button 12 pressed.");
-
             break;
         default:
             RCLCPP_WARN(this->get_logger(), "Unknown button ID: %d", button_id);
@@ -462,11 +379,9 @@ public:
 
     void callbackUwbPose2D(const geometry_msgs::msg::Pose2D::SharedPtr msg)
     {
-        // Update robot pose based on UWB data
         uwb_pose.pose_x = msg->x;
         uwb_pose.pose_y = msg->y;
         uwb_pose.pose_theta = msg->theta;
-        // RCLCPP_DEBUG(this->get_logger(), "UWB Pose updated: (%.2f, %.2f, %.2f)", msg->x, msg->y, msg->theta);
     }
 
     void callbackVisionPersonPosition(const std_msgs::msg::String::SharedPtr msg)
@@ -497,87 +412,6 @@ public:
         }
     }
 
-    void callbackPointCloud2(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-    {
-        get_robot_pose();
-
-        RCLCPP_INFO(this->get_logger(), "Received PointCloud2 with %u points", msg->width * msg->height);
-
-        // log all data x,y from points
-        std::vector<std::pair<float, float>> points = extractPointsFromCloud(msg);
-        if (points.empty())
-        {
-            return;
-        }
-        for (const auto &[x, y] : points)
-        {
-            logger.info("Point: (%.2f, %.2f)", x, y);
-        }
-
-        if (!person_detected_)
-        {
-            RCLCPP_INFO(this->get_logger(), "No person detected by vision, skipping point cloud processing");
-            return; // No person detected by camera, skip processing
-        }
-
-        // Parse point cloud data
-
-        logger.info("Extracted %zu points from point cloud", points.size());
-
-        // Get angle range based on camera detection zone
-        auto [angle_min, angle_max] = getAngleRangeForVisionZone(vision_person_position_);
-
-        // Filter points: front cone + camera direction + distance range
-        float closest_distance = std::numeric_limits<float>::max();
-        float closest_angle = 0.0f;
-
-        for (const auto &[x, y] : points)
-        {
-            // Calculate distance and angle in robot frame
-            float distance = std::sqrt(x * x + y * y);
-            float angle = std::atan2(y, x);
-
-            // Filter by distance range
-            if (distance < LIDAR_MIN_RANGE || distance > LIDAR_MAX_RANGE)
-                continue;
-
-            // Filter by front cone
-            if (std::abs(angle) > LIDAR_FRONT_CONE_ANGLE)
-                continue;
-
-            // Filter by camera vision zone
-            if (angle < angle_min || angle > angle_max)
-                continue;
-
-            // Find closest point in the zone
-            if (distance < closest_distance)
-            {
-                closest_distance = distance;
-                closest_angle = angle;
-            }
-        }
-
-        logger.info("robot pose: (%.2f, %.2f, %.2f)", robot.pose_x, robot.pose_y, robot.pose_theta);
-
-        // If we found a valid point, transform to global coordinates
-        if (closest_distance < std::numeric_limits<float>::max())
-        {
-            person_distance_ = closest_distance;
-
-            // Transform from robot-local to global coordinates
-            float global_angle = robot.pose_theta + closest_angle;
-            person_global_pose_.pose_x = robot.pose_x + closest_distance * std::cos(global_angle);
-            person_global_pose_.pose_y = robot.pose_y + closest_distance * std::sin(global_angle);
-            person_global_pose_.pose_theta = 0.0f; // Not estimating person orientation
-
-            // Publish results
-            publishPersonGlobalPosition();
-
-            logger.info("Person detected at distance %.2fm, global position (%.2f, %.2f)",
-                        person_distance_, person_global_pose_.pose_x, person_global_pose_.pose_y);
-        }
-    }
-
     // Helper: Publish person global position
     void publishPersonGlobalPosition()
     {
@@ -592,80 +426,71 @@ public:
         pub_person_distance_->publish(distance_msg);
     }
 
+    void transmit_data_to_web()
+    {
+        // publish robot info to web ui
+        geometry_msgs::msg::Pose2D robot_pose_msg;
+        robot_pose_msg.x = robot.pose_x;
+        robot_pose_msg.y = robot.pose_y;
+        robot_pose_msg.theta = robot.pose_theta;
+        pub_ui_robot_pose2d_->publish(robot_pose_msg);
+        std_msgs::msg::Int8 robot_mode_msg;
+        robot_mode_msg.data = robot.mode;
+        pub_ui_robot_mode_->publish(robot_mode_msg);
+        geometry_msgs::msg::Pose2D human_pose_msg;
+        human_pose_msg.x = human.pose_x;
+        human_pose_msg.y = human.pose_y;
+        human_pose_msg.theta = human.pose_theta;
+        pub_ui_human_pose2d_->publish(human_pose_msg);
+        geometry_msgs::msg::Twist human_velocity_msg;
+        human_velocity_msg.linear.x = human.delta_linear;
+        human_velocity_msg.angular.z = human.vel_angular;
+        pub_ui_human_velocity_->publish(human_velocity_msg);
+        std_msgs::msg::Int8 human_mode_msg;
+        human_mode_msg.data = human.mode;
+        pub_ui_human_mode_->publish(human_mode_msg);
+        std_msgs::msg::Int8 robot_fsm_mode_msg;
+        robot_fsm_mode_msg.data = fsm_mode.value;
+        pub_ui_robot_fsm_mode_->publish(robot_fsm_mode_msg);
+    }
+
     // ============================================================
     // TIMER ROUTINE
     // ============================================================
     void timerMode()
     {
-
-        switch (fsm_mode.value)
-        {
-        case MODE_TRACK_UWB:
-        {
-            // Example periodic UWB handling
-            get_robot_pose();
-
-            get_uwb_pose_offset();
-
-            move_to_uwb_offset();
-
-            logger.info("UWB Pose: %.2f, %.2f, %.2f | %.2f %.2f %.2f", uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose_offset.pose_theta, robot.pose_x, robot.pose_y, robot.pose_theta);
-
-            break;
-        }
-        case MODE_TRACK_CAMERA:
-        {
-            static obstacle_checking_t obs_used;
-
-            if (person_detected_)
-            {
-                get_lidar_data();
-                std::this_thread::sleep_for(200ms);
-                get_robot_pose();
-                std::this_thread::sleep_for(100ms);
-                process_lidar();
-                std::this_thread::sleep_for(100ms);
-
-                if (obstacle_middle.status && vision_person_position_ == "middle")
-                {
-                    obs_used = obstacle_middle;
-                }
-                else if (obstacle_left.status && vision_person_position_ == "left")
-                {
-                    obs_used = obstacle_left;
-                }
-                else if (obstacle_right.status && vision_person_position_ == "right")
-                {
-                    obs_used = obstacle_right;
-                }
-                else if (obstacle_most_right.status && vision_person_position_ == "most_right")
-                {
-                    obs_used = obstacle_most_right;
-                }
-                else if (obstacle_most_left.status && vision_person_position_ == "most_left")
-                {
-                    obs_used = obstacle_most_left;
-                }
-                else
-                {
-                    obs_used.status = 0; // no obstacle
-                }
-
-                move_to_camera_person(obs_used);
-            }
-            break;
-        }
-        default:
-            break;
-        }
     }
 
     void timerRoutine()
     {
-        get_lidar_data();
-        std::this_thread::sleep_for(200ms);
-        get_robot_pose();
-        std::this_thread::sleep_for(200ms);
+        get_lidar_data(); //
+        std::this_thread::sleep_for(100ms);
+        get_robot_pose(); //
+        std::this_thread::sleep_for(100ms);
+
+        if (fsm_mode.value == MODE_TRACK_UWB)
+        {
+            get_human_from_uwb();
+        }
+        else if (fsm_mode.value == MODE_TRACK_CAMERA)
+        {
+            get_human_from_camera();
+        }
+
+        get_human_pose_offset_back();
+        get_human_pose_offset_right();
+        get_human_pose_offset_sit();
+
+        human_following();
+
+        logger.info("Robot: %.2f %.2f %.2f | Human: %.2f %.2f %.2f | Mode: %d",
+                    robot.pose_x, robot.pose_y, robot.pose_theta,
+                    human.pose_x, human.pose_y, human.pose_theta,
+                    human.mode);
+
+        transmit_data_to_web();
+
+        // logger.info("%.2f %.2f %.2f | %.2f %.2f | %d | %.2f | %.2f", robot.pose_x, robot.pose_y, robot.pose_theta, human.pose_x, human.pose_y, human.mode, human.mode, human.distance_to_robot, human.delta_linear);
     }
 
     void keyboardCommandRoutine()
@@ -750,10 +575,86 @@ public:
         pub_get_lidar_->publish(msg);
     }
 
-    void get_uwb_pose_offset()
+    void human_following()
     {
-        float dx = robot.pose_x - uwb_pose.pose_x;
-        float dy = robot.pose_y - uwb_pose.pose_y;
+        static float last_x = 0.0f;
+        static float last_y = 0.0f;
+        static float last_theta = 0.0f;
+
+        static float delta_move_x = 0.0f;
+        static float delta_move_y = 0.0f;
+        static float delta_move_theta = 0.0f;
+
+        static int8_t prev_mode = 0;
+        static int8_t is_person_moving = 0;
+        static int16_t cntr_reentry = 0;
+
+        static pose2d_t used_human_pose = {0.0f, 0.0f, 0.0f};
+
+        if (human.mode == 0)
+        {
+            used_human_pose.pose_x = human.right_pose_x;
+            used_human_pose.pose_y = human.right_pose_y;
+            used_human_pose.pose_theta = human.right_pose_theta;
+        }
+        else if (human.mode == 1)
+        {
+            used_human_pose.pose_x = human.offset_pose_x;
+            used_human_pose.pose_y = human.offset_pose_y;
+            used_human_pose.pose_theta = human.offset_pose_theta;
+        }
+        else if (human.mode == 2)
+        {
+            used_human_pose.pose_x = human.sit_pose_x;
+            used_human_pose.pose_y = human.sit_pose_y;
+            used_human_pose.pose_theta = human.sit_pose_theta;
+        }
+
+        delta_move_x = fabs(used_human_pose.pose_x - last_x);
+        delta_move_y = fabs(used_human_pose.pose_y - last_y);
+        delta_move_theta = fabs(used_human_pose.pose_theta - last_theta);
+
+        is_person_moving = (delta_move_x > 1.0f || delta_move_y > 1.0f);
+
+        logger.info("last: %.2f, %.2f", fabs(robot.pose_x - last_x), fabs(robot.pose_y - last_y));
+        logger.info("delta: %.2f, %.2f", delta_move_x, delta_move_y);
+
+        if (cntr_reentry > 0)
+        {
+            logger.info("Reentry counter active: %d", cntr_reentry);
+            cntr_reentry--;
+            return;
+        }
+
+        if (is_person_moving)
+        {
+            if (robot.nav_status_res != 1)
+            {
+                goTo(used_human_pose.pose_x, used_human_pose.pose_y, used_human_pose.pose_theta);
+                last_x = used_human_pose.pose_x;
+                last_y = used_human_pose.pose_y;
+                last_theta = used_human_pose.pose_theta;
+                logger.info("===== right: %.2f, %.2f, %.2f", used_human_pose.pose_x, used_human_pose.pose_y, used_human_pose.pose_theta);
+                cntr_reentry = 30;
+            }
+            else
+            {
+                if (fabs(robot.pose_x - last_x) < 1.5f && fabs(robot.pose_y - last_y) < 1.5f)
+                {
+                    logger.info("Person is moving and robot is close to last target. Skipping move command.");
+                    cancelNav();
+                    cntr_reentry = 10;
+                }
+            }
+        }
+
+        logger.info("%d %d | %d %d | %.2f %.2f", is_person_moving, robot.nav_status_res, human.mode, cntr_reentry, delta_move_x, delta_move_y);
+    }
+
+    void get_human_pose_offset_back()
+    {
+        float dx = robot.pose_x - human.pose_x;
+        float dy = robot.pose_y - human.pose_y;
 
         float dist = std::sqrt(dx * dx + dy * dy);
 
@@ -766,120 +667,95 @@ public:
             float ux = dx / dist;
             float uy = dy / dist;
 
-            uwb_pose_offset.pose_x = uwb_pose.pose_x + ux * offset_meter;
-            uwb_pose_offset.pose_y = uwb_pose.pose_y + uy * offset_meter;
+            human.offset_pose_x = human.pose_x + ux * offset_meter;
+            human.offset_pose_y = human.pose_y + uy * offset_meter;
         }
 
-        uwb_pose_offset.pose_theta = std::atan2(uwb_pose.pose_y - uwb_pose_offset.pose_y, uwb_pose.pose_x - uwb_pose_offset.pose_x);
+        human.offset_pose_theta = std::atan2(human.pose_y - human.offset_pose_y, human.pose_x - human.offset_pose_x);
+        human.offset_pose_theta = human.last_angle_movement;
     }
 
-    void move_to_uwb_offset()
+    // TODO: check this function jika orang diam
+    void get_human_pose_offset_right()
     {
-        get_robot_pose();
-        std::this_thread::sleep_for(50ms);
+        float angle_right = human.last_angle_movement - M_PI / 2.0f;
 
-        static float prev_x = uwb_pose_offset.pose_x;
-        static float prev_y = uwb_pose_offset.pose_y;
-        static float prev_theta = uwb_pose.pose_theta;
+        human.right_pose_x = human.pose_x + 0.8 * std::cos(angle_right);
+        human.right_pose_y = human.pose_y + 0.8 * std::sin(angle_right);
+        human.right_pose_theta = human.last_angle_movement;
+    }
+
+    void get_human_pose_offset_sit()
+    {
+        float angle_sit = human.last_angle_movement - M_PI / 2.0f;
+
+        human.sit_pose_x = human.pose_x + 0.8 * std::cos(angle_sit);
+        human.sit_pose_y = human.pose_y + 0.8 * std::sin(angle_sit);
+        human.sit_pose_theta = human.last_angle_movement + (M_PI * 0.5f);
+    }
+
+    void move_to_human_rear()
+    {
+        // get_robot_pose();
+        // std::this_thread::sleep_for(50ms);
+
+        static float prev_x = human.offset_pose_x;
+        static float prev_y = human.offset_pose_y;
+        static float prev_theta = human.offset_pose_theta;
         float deg_theshold = 30.0f; // degrees
 
         // Only send goTo command if the target position has changed significantly
-        if (std::fabs(uwb_pose_offset.pose_x - prev_x) < 1.0f &&
-            std::fabs(uwb_pose_offset.pose_y - prev_y) < 1.0f
-            // && std::fabs(uwb_pose.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)g
+        if (std::fabs(human.offset_pose_x - prev_x) < 1.0f &&
+            std::fabs(human.offset_pose_y - prev_y) < 1.0f
+            // && std::fabs(human.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)g
         )
         {
             logger.info("SKIP move");
         }
         else
         {
-            goTo(uwb_pose_offset.pose_x, uwb_pose_offset.pose_y, uwb_pose.pose_theta);
         }
 
-        prev_x = uwb_pose_offset.pose_x;
-        prev_y = uwb_pose_offset.pose_y;
-        prev_theta = uwb_pose.pose_theta;
+        if (robot.nav_status_res != 1)
+            goTo(human.offset_pose_x, human.offset_pose_y, human.offset_pose_theta);
+
+        prev_x = human.offset_pose_x;
+        prev_y = human.offset_pose_y;
+        prev_theta = human.pose_theta;
     }
 
-    void move_to_camera_person(obstacle_checking_t obs_used)
+    void move_to_human_right()
     {
-        pose2d_t target_offset;
-        static float prev_x = target_offset.pose_x;
-        static float prev_y = target_offset.pose_y;
-        static float prev_theta = target_offset.pose_theta;
+        // get_robot_pose();
 
-        target_offset = get_near_obstacle_point(obs_used);
+        static float prev_x = human.right_pose_x;
+        static float prev_y = human.right_pose_y;
+        static float prev_theta = human.right_pose_theta;
 
-        if (std::fabs(target_offset.pose_x - prev_x) < 1.0f &&
-            std::fabs(target_offset.pose_y - prev_y) < 1.0f
-            // && std::fabs(target_offset.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)
+        float deg_theshold = 30.0f; // degrees
+
+        // Only send goTo command if the target position has changed significantly
+        if (std::fabs(human.right_pose_x - prev_x) < 1.0f &&
+            std::fabs(human.right_pose_y - prev_y) < 1.0f
+            // && std::fabs(human.right_pose_theta - prev_theta) < (deg_theshold * 0.017453293f)
         )
         {
             logger.info("SKIP move");
         }
         else
         {
-
-            goTo(target_offset.pose_x, target_offset.pose_y, target_offset.pose_theta);
         }
 
-        prev_x = target_offset.pose_x;
-        prev_y = target_offset.pose_y;
-        prev_theta = target_offset.pose_theta;
-    }
+        if (robot.nav_status_res != 1)
+            goTo(human.right_pose_x, human.right_pose_y, human.right_pose_theta);
 
-    // Helper: Extract (x, y) points from PointCloud2 message
-    std::vector<std::pair<float, float>> extractPointsFromCloud(const sensor_msgs::msg::PointCloud2::SharedPtr &msg)
-    {
-        std::vector<std::pair<float, float>> points;
-
-        // PointCloud2 data is stored as binary blob
-        // Assuming format: x (float32), y (float32), z (float32) = 12 bytes per point
-        const size_t point_step = msg->point_step; // Should be 12 for xyz
-        const size_t num_points = msg->width * msg->height;
-
-        points.reserve(num_points);
-
-        for (size_t i = 0; i < num_points; ++i)
-        {
-            size_t offset = i * point_step;
-
-            if (offset + 8 > msg->data.size())
-                break;
-
-            float x, y;
-            std::memcpy(&x, &msg->data[offset], sizeof(float));
-            std::memcpy(&y, &msg->data[offset + 4], sizeof(float));
-
-            points.emplace_back(x, y);
-        }
-
-        return points;
-    }
-
-    // Helper: Get angle range for camera vision zone
-    std::pair<float, float> getAngleRangeForVisionZone(const std::string &zone)
-    {
-        // Convert camera zones to lidar angle ranges (in radians)
-        // Robot forward = 0°, left = positive, right = negative
-
-        if (zone == "most_left")
-            return {M_PI / 3.0f, M_PI / 2.0f}; // 60° to 90°
-        else if (zone == "left")
-            return {M_PI / 10.0f, M_PI / 3.0f}; // 18° to 60°
-        else if (zone == "middle")
-            return {-M_PI / 10.0f, M_PI / 10.0f}; // -18° to +18°
-        else if (zone == "right")
-            return {-M_PI / 3.0f, -M_PI / 10.0f}; // -60° to -18°
-        else if (zone == "most_right")
-            return {-M_PI / 2.0f, -M_PI / 3.0f}; // -90° to -60°
-        else
-            return {-M_PI / 10.0f, M_PI / 10.0f}; // Default to middle
+        prev_x = human.right_pose_x;
+        prev_y = human.right_pose_y;
+        prev_theta = human.right_pose_theta;
     }
 
     void process_lidar()
     {
-
         // get start time for lidar processing from chrono
         auto start_time = std::chrono::high_resolution_clock::now();
         Pose2D pose{robot.pose_x, robot.pose_y, robot.pose_theta};
@@ -1003,25 +879,126 @@ public:
         return result;
     }
 
-    pose2d_t get_near_obstacle_point(obstacle_checking_t obs_used)
+    void get_human_from_camera()
     {
+        process_lidar();
 
-        pose2d_t target_point;
+        static obstacle_checking_t obs_used;
 
-        float d_stop = 1.5f;
-        float dx = obs_used.pos_x - robot.pose_x;
-        float dy = obs_used.pos_y - robot.pose_y;
-        float distance_to_obstacle = sqrtf(dx * dx + dy * dy);
+        if (person_detected_)
+        {
+            if (obstacle_middle.status && vision_person_position_ == "middle")
+            {
+                obs_used = obstacle_middle;
+            }
+            else if (obstacle_left.status && vision_person_position_ == "left")
+            {
+                obs_used = obstacle_left;
+            }
+            else if (obstacle_right.status && vision_person_position_ == "right")
+            {
+                obs_used = obstacle_right;
+            }
+            else if (obstacle_most_right.status && vision_person_position_ == "most_right")
+            {
+                obs_used = obstacle_most_right;
+            }
+            else if (obstacle_most_left.status && vision_person_position_ == "most_left")
+            {
+                obs_used = obstacle_most_left;
+            }
+            else
+            {
+                obs_used.status = 0; // no obstacle
+            }
+            get_human_from_lidar(obs_used);
+        }
+    }
 
-        float scale = (distance_to_obstacle - d_stop) / distance_to_obstacle;
-        target_point.pose_x = robot.pose_x + (dx * scale);
-        target_point.pose_y = robot.pose_y + (dy * scale);
+    void get_human_from_lidar(obstacle_checking_t obs_used)
+    {
+        static int8_t prev_obs_status = 0;
 
-        target_point.pose_theta = atan2f(target_point.pose_y - robot.pose_y, target_point.pose_x - robot.pose_x);
+        if (obs_used.status)
+        {
 
-        logger.info("Target Point to near obstacle: (%.2f, %.2f, %.2f)", target_point.pose_x, target_point.pose_y, target_point.pose_theta);
+            human.prev_pose_x = human.pose_x;
+            human.prev_pose_y = human.pose_y;
+            human.prev_pose_theta = human.pose_theta;
 
-        return target_point;
+            human.prev_pose_x = human.pose_x;
+            human.prev_pose_y = human.pose_y;
+            human.prev_pose_theta = human.pose_theta;
+
+            float dx = obs_used.pos_x - robot.pose_x;
+            float dy = obs_used.pos_y - robot.pose_y;
+
+            human.pose_x = robot.pose_x + dx;
+            human.pose_y = robot.pose_y + dy;
+            human.pose_theta = std::atan2(dy, dx);
+
+            human.distance_to_robot = std::sqrt(dx * dx + dy * dy);
+            human.angle_to_robot = std::atan2(dy, dx);
+            human.mode = 1;
+
+            if (fabs(human.pose_x - human.prev_pose_x) > 0.2 || fabs(human.pose_y - human.prev_pose_y) > 0.2)
+            {
+                human.delta_linear = std::sqrt(std::pow(human.pose_x - human.prev_pose_x, 2) + std::pow(human.pose_y - human.prev_pose_y, 2)); // assuming callback every 500ms
+                human.angle_movement = (std::atan2(human.pose_y - human.prev_pose_y, human.pose_x - human.prev_pose_x));
+                human.last_angle_movement = human.angle_movement;
+                logger.info("====== Significant LIDAR movement detected ========.");
+            }
+            else
+            {
+                human.delta_linear = 0.0f;
+                human.angle_movement = 0.0f;
+                human.mode = 0;
+            }
+        }
+        else
+        {
+            human.distance_to_robot = 0.0f;
+            human.mode = -1;
+        }
+
+        logger.info("LIDAR: %.2f, %.2f, %.2f | Distance: %.2f m",
+                    human.pose_x, human.pose_y, human.pose_theta, human.distance_to_robot);
+
+        prev_obs_status = obs_used.status;
+    }
+
+    void get_human_from_uwb()
+    {
+        human.prev_pose_x = human.pose_x;
+        human.prev_pose_y = human.pose_y;
+        human.prev_pose_theta = human.pose_theta;
+
+        human.pose_x = uwb_pose.pose_x;
+        human.pose_y = uwb_pose.pose_y;
+        human.pose_theta = uwb_pose.pose_theta;
+
+        human.distance_to_robot = std::sqrt(std::pow(human.pose_x - robot.pose_x, 2) + std::pow(human.pose_y - robot.pose_y, 2));
+        human.angle_to_robot = std::atan2(human.pose_y - robot.pose_y, human.pose_x - robot.pose_x);
+
+        if (fabs(human.pose_x - human.prev_pose_x) > 0.3 || fabs(human.pose_y - human.prev_pose_y) > 0.3)
+        {
+            human.delta_linear = std::sqrt(std::pow(human.pose_x - human.prev_pose_x, 2) + std::pow(human.pose_y - human.prev_pose_y, 2)); // assuming callback every 500ms
+            human.angle_movement = (std::atan2(human.pose_y - human.prev_pose_y, human.pose_x - human.prev_pose_x));
+            human.mode = 1;
+            human.last_angle_movement = human.angle_movement;
+            logger.info("====== Significant UWB movement detected ========.");
+        }
+        else
+        {
+            human.delta_linear = 0.0f;
+            human.angle_movement = 0.0f;
+            human.mode = 0;
+        }
+
+        // logger.info("__UWB: %.2f, %.2f, %.2f | Distance: %.2f m",
+        //             human.pose_x, human.pose_y, human.pose_theta, std::sqrt(std::pow(human.pose_x - robot.pose_x, 2) + std::pow(human.pose_y - robot.pose_y, 2)));
+
+        // logger.info("delta linear: %.2f | angle: %.2f -> %.2f", human.delta_linear, human.angle_movement, human.last_angle_movement);
     }
 };
 

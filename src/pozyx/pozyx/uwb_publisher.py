@@ -21,7 +21,7 @@ from geometry_msgs.msg import Pose2D
 
 from pypozyx import (
     PozyxSerial, get_first_pozyx_serial_port, PozyxConstants,
-    Coordinates, DeviceCoordinates, SensorData, POZYX_SUCCESS
+    Coordinates, DeviceCoordinates, SensorData, POZYX_SUCCESS, EulerAngles
 )
 
 # ==========================
@@ -48,7 +48,7 @@ def regressY(x):
 # ==========================
 TAG_TARGET = 0x6800
 CSV_FILE   = "position_log.csv"
-LOOP_DT    = 0.3
+LOOP_DT    = 0.5
 
 OFFSET_X = 3325
 OFFSET_Y = 831
@@ -137,6 +137,13 @@ def get_position(po, rid):
     )
     return (ok == POZYX_SUCCESS, pos)
 
+def get_heading(po, rid):
+    euler = EulerAngles()
+    status = po.getEulerAngles_deg(euler, remote_id=rid)
+    if status == POZYX_SUCCESS:
+        return float(euler.heading)  # degrees
+    return None
+
 
 # ==========================
 # UMEYAMA
@@ -189,15 +196,21 @@ def main():
     pozyx = PozyxSerial(port)
     print("Connected:", port)
 
+
     pozyx.clearDevices(TAG_TARGET)
     for a in ANCHORS:
         pozyx.addDevice(a, TAG_TARGET)
 
     kalman = None
+    heading_rad = 0.0
 
     try:
         while rclpy.ok():
             ok, pos = get_position(pozyx, TAG_TARGET)
+            heading_deg = get_heading(pozyx, TAG_TARGET)
+
+            if heading_deg is not None:
+                heading_rad = np.deg2rad(heading_deg)
 
             if ok:
                 raw_x = float(pos.x) / 1000
@@ -206,7 +219,7 @@ def main():
                 meas = (raw_x, raw_y)
 
                 if kalman is None:
-                    kalman = Kalman2D(meas, 4000, 50000)
+                    kalman = Kalman2D(meas, 8000, 100000)
 
                 kalman.predict(LOOP_DT)
                 kalman.update(meas)
@@ -214,7 +227,13 @@ def main():
                 fx, fy = kalman.get_xy()
                 ux, uy = uwb_to_odom(fx, fy)
 
-                ros_node.publish(ux, uy, 0.0)
+                heading_rad += np.pi  # adjust heading
+                if heading_rad > np.pi:
+                    heading_rad -= 2 * np.pi
+                if heading_rad < -np.pi:
+                    heading_rad += 2 * np.pi
+
+                ros_node.publish(ux, uy, -heading_rad)
                 # print(f"ROS2 Pose2D → x:{ux:.3f} y:{uy:.3f}")
                 # use ros2 log info instead of print if needed
                 # ros_node.get_logger().info(f"ROS2 Pose2D → x:{ux:.3f} y:{uy:.3f}")

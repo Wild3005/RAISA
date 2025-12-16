@@ -139,11 +139,93 @@ function sendCommandButton(btnId) {
     console.log("📤 Sent:", payload.data);
 }
 
-// const stdout1 = document.getElementById("stdout1");
-// stdout1.src =
-//   "http://" +
-//   window.location.hostname +
-//   ":8080/stream?topic=" +
-//   "/vision/pose_frame" +
-//   "&quality=10";
-// stdout1.alt = "MJPEG Stream";
+const stdout1 = document.getElementById("stdout1");
+stdout1.src =
+  "http://" +
+  window.location.hostname +
+  ":8080/stream?topic=" +
+  "/vision/pose_frame" +
+  "&quality=10";
+stdout1.alt = "MJPEG Stream";
+
+function updateFloat(id, value) {
+    document.getElementById(id).innerText = value.toFixed(2);
+}
+
+function updateInt(id, value) {
+    document.getElementById(id).innerText = value;
+}
+
+var robotPoseSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/robot/pose2d",
+    messageType: "geometry_msgs/Pose2D"
+});
+
+robotPoseSub.subscribe(msg => {
+    updateFloat("robot_x", msg.x);
+    updateFloat("robot_y", msg.y);
+    updateFloat("robot_th", msg.theta);
+});
+
+var robotModeSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/robot/mode",
+    messageType: "std_msgs/Int8"
+});
+
+robotModeSub.subscribe(msg => {
+    updateInt("robot_nav_mode", msg.data);
+});
+
+
+var robotFSMSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/robot/fsm_mode",
+    messageType: "std_msgs/Int8"
+});
+
+robotFSMSub.subscribe(msg => {
+    updateInt("robot_fsm_mode", msg.data);
+});
+var robotFollowSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/robot/following_mode",
+    messageType: "std_msgs/Int8"
+});
+
+robotFollowSub.subscribe(msg => {
+    updateInt("robot_follow_mode", msg.data);
+});
+var humanPoseSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/human/pose2d",
+    messageType: "geometry_msgs/Pose2D"
+});
+
+humanPoseSub.subscribe(msg => {
+    updateFloat("human_x", msg.x);
+    updateFloat("human_y", msg.y);
+    updateFloat("human_th", msg.theta);
+});
+var humanVelSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/human/velocity",
+    messageType: "geometry_msgs/Twist"
+});
+
+humanVelSub.subscribe(msg => {
+    updateFloat("human_vx", msg.linear.x);
+    updateFloat("human_vy", msg.linear.y);
+    updateFloat("human_vth", msg.angular.z);
+});
+var humanModeSub = new ROSLIB.Topic({
+    ros: ros,
+    name: "/ui/human/mode",
+    messageType: "std_msgs/Int8"
+});
+
+humanModeSub.subscribe(msg => {
+    updateInt("human_mode", msg.data);
+});
+

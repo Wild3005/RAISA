@@ -38,7 +38,7 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.248",
+                "reeman_ros_ip": "10.7.101.2500",
                 "min_request_period_speed_ms": 600,
                 "polling_period_ms": 300,
 
@@ -198,14 +198,14 @@ def generate_launch_description():
 
             # audio_controller,
             
-            capture,
+            # capture,
             # hand_track,
             # face_detection,
-            pose_detection,
+            # pose_detection,
             # lidar_processor,
 
             # telemetry,
-            # pozyx_node,
+            pozyx_node,
             master,
             # keyboard_input,
 
