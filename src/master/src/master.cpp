@@ -16,6 +16,11 @@ using namespace std::chrono_literals;
 #define CASE_SittingApproach 0
 #define CASE_StandingApproach 1
 #define CASE_CrossBehind 2
+#define CASE_EscortMode 3
+#define CASE_ActiveYealding 4
+#define CASE_StandartPassing 5
+#define CASE_StopAndWait 6
+#define CASE_ProceedCaution 7
 #define CASE_IDLE 8
 
 #define MODE_INTERACTION 10
@@ -42,7 +47,8 @@ public:
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_robot_battery_;
     rclcpp::Subscription<ros2_interface::msg::Robot>::SharedPtr sub_robot_info_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_status_;
-    // rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_mode_;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_mode_;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_case_state_;
     
     // ===== Tambahkan Timer =====
     rclcpp::TimerBase::SharedPtr timer_;
@@ -92,7 +98,17 @@ public:
 
     // Tracking waktu untuk velocity person
     rclcpp::Time last_uwb_time_;
+    rclcpp::Time prev_uwb_time_;
     bool first_uwb_{true};
+
+    // status people
+    bool arePeopleSitting;
+
+    // TTC tracking
+    double last_ttc_{-1.0};
+
+    // Direction People
+    int direction_person_{1}; // 1: SEARAH, 0: MEMOTONG JALAN ORANG, -1: BERLAWANAN ARAH
 
     MasterNode() : Node("master") {
         RCLCPP_INFO(this->get_logger(), "MasterNode initialized.");
@@ -124,29 +140,55 @@ public:
             "/reeman/nav_status", 1, std::bind(&MasterNode::callbackNavStatus, this, std::placeholders::_1));
         
         // Subscribe MODE dari Web UI
-        // sub_button_mode_ = this->create_subscription<std_msgs::msg::Int8>(
-        //     "/button/mode", 10,
-        //     [this](const std_msgs::msg::Int8::SharedPtr msg) {
-        //         int new_mode = msg->data;
-        //         if (new_mode == MODE_INTERACTION || new_mode == MODE_NAVIGATION) {
-        //             MODE = new_mode;
-        //             fsm_entry_sent_ = false;
-        //             nav_status_ready_ = false;
-        //             nav_in_progress_ = false;
-        //             RCLCPP_INFO(this->get_logger(), "Switch MODE → %s",
-        //                 MODE == MODE_INTERACTION ? "INTERACTION" : "NAVIGATION");
-        //             // Set starting case sesuai mode
-        //             fsm_robot.value = (MODE == MODE_INTERACTION) ? CASE_SittingApproach : CASE_CrossBehind;
-        //         } else {
-        //             RCLCPP_WARN(this->get_logger(), "Unknown MODE: %d", new_mode);
-        //         }
-        //     }
-        // );
+        sub_button_mode_ = this->create_subscription<std_msgs::msg::Int8>(
+            "/button/mode", 10,
+            [this](const std_msgs::msg::Int8::SharedPtr msg) {
+                int new_mode = msg->data;
+                if (new_mode == MODE_INTERACTION || new_mode == MODE_NAVIGATION) {
+                    MODE = new_mode;
+                    fsm_entry_sent_ = false;
+                    nav_status_ready_ = false;
+                    nav_in_progress_ = false;
+                    RCLCPP_INFO(this->get_logger(), "Switch MODE → %s",
+                        MODE == MODE_INTERACTION ? "INTERACTION" : "NAVIGATION");
+                    // Set starting case sesuai mode
+                    fsm_robot.value = (MODE == MODE_INTERACTION) ? CASE_SittingApproach : CASE_CrossBehind;
+
+                    // Jika masuk NAVIGATION, kirim goal pertama segera
+                    if (MODE == MODE_NAVIGATION) {
+                        Pose2 target = going_to_A_ ? patrol_A_ : patrol_B_;
+                        goTo(target.x, target.y, target.th);
+                        nav_in_progress_ = true;
+                        fsm_entry_sent_ = true;
+                        nav_status_ready_ = false;
+                        RCLCPP_INFO(this->get_logger(),
+                            "NAV START: goTo (%.2f, %.2f, th=%.2f) target=%s",
+                            target.x, target.y, target.th, going_to_A_ ? "A" : "B");
+                    }
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Unknown MODE: %d", new_mode);
+                }
+            }
+        );
+
+        sub_button_case_state_ = this->create_subscription<std_msgs::msg::Int8>(
+            "/button/case_state", 10,
+            [this](const std_msgs::msg::Int8::SharedPtr msg) {
+                int new_case = msg->data;
+                if (new_case == 1) {
+                    arePeopleSitting = true;
+                }else if(new_case == 2){
+                    arePeopleSitting = false;
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Unknown FSM CASE: %d", new_case);
+                }
+            }
+        );
 
         // ==========================================================================
         // Inisialisasi start state default
-        // fsm_robot.value = CASE_CrossBehind;
-        fsm_robot.value = CASE_StandingApproach;
+        fsm_robot.value = CASE_SittingApproach;
+        // fsm_robot.value = CASE_StandingApproach;
         // ==========================================================================
 
         // Timer
@@ -160,17 +202,19 @@ public:
     // ============================================================
     
     void callbackUWBPose(const geometry_msgs::msg::Pose2D::SharedPtr msg) {
-        // Simpan pose sebelumnya sebelum update
+        // Simpan pose & waktu sebelumnya sebelum update
         if (!first_uwb_) {
             uwb_pose_prev_ = uwb_pose_;
+            prev_uwb_time_ = last_uwb_time_;
         }
-        
+
         uwb_pose_ = *msg;
         last_uwb_time_ = this->now();
         uwb_data_received_ = true;
-        
+
         if (first_uwb_) {
-            uwb_pose_prev_ = uwb_pose_;  // inisialisasi
+            uwb_pose_prev_ = uwb_pose_;
+            prev_uwb_time_ = last_uwb_time_;
             first_uwb_ = false;
         }
     }
@@ -271,25 +315,54 @@ public:
             fsm_msg.data = fsm_robot.value;
             pub_fsm_state_->publish(fsm_msg);
         }
-
-        // Evaluasi yaw person vs robot
+        
+        // ===== SELALU JALANKAN (tidak ada return) =====
         evaluateRelativeYawPersonVsRobot();
-
-        // Hitung velocity person dari UWB
         velocity v = calculateVelocityPerson();
+        evaluateTTC(); 
+
         RCLCPP_INFO(this->get_logger(),"Person VEL X %.2f Y %.2f m/s", v.vx, v.vy);
-
-        // RCLCPP_INFO(this->get_logger(),"MODE %d",MODE);
         RCLCPP_INFO(this->get_logger(),"RES %d || RES PREV %d",res, prev_res);
+        RCLCPP_INFO(this->get_logger(),"FSM MODE %d",MODE);
+        RCLCPP_INFO(this->get_logger(),"FSM CASE %d",fsm_robot.value);
 
+        // ===== STATEMENT CASE (update fsm_robot.value) =====
+        if(v.vx > 0.1 || v.vy > 0.1){ // PERSON BERGERAK (dinamis)
+            RCLCPP_INFO(this->get_logger(),"CEKK DINAMIS");
+            if(MODE == MODE_INTERACTION){
+                RCLCPP_INFO(this->get_logger(),"PLEASE SWITCH TO NAVIGATION MODE");
+                // ← JANGAN return! lanjut ke mode check
+            }
+            else{
+                if(direction_person_ == 1){ // SEARAH
+                    RCLCPP_INFO(this->get_logger(),"CEKK SEARAH");
+                }else if(direction_person_ == 0){ // MEMOTONG JALAN ORANG
+                    RCLCPP_INFO(this->get_logger(),"CEKK MEMOTONG JALAN ORANG");
+                }else if(direction_person_ == -1){ // BERLAWANAN ARAH
+                    RCLCPP_INFO(this->get_logger(),"CEKK BERLAWANAN ARAH");
+                }
+            }
+        }else{ // PERSON DIAM (statis)
+            RCLCPP_INFO(this->get_logger(),"CEKK STATIS");
+            if(MODE == MODE_NAVIGATION){
+                fsm_robot.value = CASE_CrossBehind;
+            }else{
+                if(arePeopleSitting){
+                    fsm_robot.value = CASE_SittingApproach;
+                }else{
+                    fsm_robot.value = CASE_StandingApproach;
+                }
+            }
+        }
 
-        // ====== MODE SWITCH (BERSARANG) ======
+        // ===== MODE SWITCH (BERSARANG) - SELALU JALANKAN =====
         if (MODE == MODE_INTERACTION) {
             // pastikan pose robot sudah ada
             if (!robot_info_received_) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                                      "Waiting for robot pose (robot_info)...");
-                return;
+                // ← TIDAK return! lanjut ke else if
+                goto mode_done;
             }
 
             auto radius_for_state = [&](int st) -> float {
@@ -317,47 +390,51 @@ public:
                     "INTERACTION ENTRY: state=%d UWB(x=%.2f,y=%.2f,rad=%.2f)",
                     fsm_robot.value, uwb_pose_.x, uwb_pose_.y, rad);
                 fsm_entry_sent_ = true;
-                nav_status_ready_ = false;  // res diabaikan, tapi biarkan flag
+                nav_status_ready_ = false;
                 nav_in_progress_ = true;
-                return;
-            }
+            } else {
+                // MONITOR: kirim UWB untuk virtual wall update
+                Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
 
-            // MONITOR: kirim UWB untuk virtual wall update
-            Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
+                // Arrival check berbasis pose robot vs goal (UWB)
+                double d = dist2d(last_pose_.x, last_pose_.y, uwb_pose_.x, uwb_pose_.y);
+                if (d <= pos_th) {
+                    RCLCPP_INFO(this->get_logger(),
+                        "INTERACTION ARRIVED: state=%d dist=%.2f (th=%.2f)",
+                        fsm_robot.value, d, pos_th);
+                    nav_in_progress_ = false;
 
-            // Arrival check berbasis pose robot vs goal (UWB)
-            double d = dist2d(last_pose_.x, last_pose_.y, uwb_pose_.x, uwb_pose_.y);
-            if (d <= pos_th) {
-                RCLCPP_INFO(this->get_logger(),
-                    "INTERACTION ARRIVED: state=%d dist=%.2f (th=%.2f)",
-                    fsm_robot.value, d, pos_th);
-                nav_in_progress_ = false;
-
-                // Toggle Sitting ↔ Standing
-                if (fsm_robot.value == CASE_SittingApproach) {
-                    fsm_robot.value = CASE_StandingApproach;
-                } else {
-                    fsm_robot.value = CASE_SittingApproach;
+                    // Toggle Sitting ↔ Standing
+                    if (fsm_robot.value == CASE_SittingApproach) {
+                        fsm_robot.value = CASE_StandingApproach;
+                    } else {
+                        fsm_robot.value = CASE_SittingApproach;
+                    }
+                    fsm_entry_sent_ = false;
+                    nav_status_ready_ = false;
                 }
-                fsm_entry_sent_ = false;
-                nav_status_ready_ = false; // meski res diabaikan
             }
         }
         else if (MODE == MODE_NAVIGATION) {
-            // Mode NAVIGATION → gunakan CASE 2 (CrossBehind) + patrol A↔B
             auto radius_for_state = [&](int st) -> float {
-                switch (st) {
-                    case CASE_CrossBehind:       return 0.6f;
-                    default:                     return 0.0f;
+            switch (st) {
+                case CASE_SittingApproach:   return 1.5f;
+                case CASE_StandingApproach:  return 1.1f;
+                case CASE_CrossBehind:       return 0.6f;
+                case CASE_EscortMode:        return 0.8f;
+                case CASE_ActiveYealding:    return 2.0f;
+                case CASE_StandartPassing:   return 1.3f;
+                case CASE_StopAndWait:       return 1.5f;
+                case CASE_ProceedCaution:    return 1.0f;
+                default:                     return 0.0f;
                 }
             };
-
             float rad = radius_for_state(fsm_robot.value);
+            Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
 
-            // ENTRY untuk CrossBehind (virtual wall + NAV target A/B)
+            // ENTRY untuk CrossBehind
             if (!fsm_entry_sent_) {
                 Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
-                // Tentukan target patrol
                 Pose2 target = going_to_A_ ? patrol_A_ : patrol_B_;
                 goTo(target.x, target.y, target.th);
                 nav_in_progress_ = true;
@@ -366,43 +443,36 @@ public:
                     target.x, target.y, target.th, going_to_A_ ? "A" : "B");
                 fsm_entry_sent_ = true;
                 nav_status_ready_ = false;
-                return;
-            }
+            } else {
+                // MONITOR: terus update virtual wall dari UWB
+                Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
 
-            // MONITOR: terus update virtual wall dari UWB
-            Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
-
-            if (!nav_status_ready_) {
-                RCLCPP_DEBUG(this->get_logger(), "NAV waiting status...");
-                return;
-            }
-
-            // EXIT: jika goal tercapai, toggle A/B dan kirim NAV lagi
-            if (res == 3 && prev_res != res) {
-                RCLCPP_INFO(this->get_logger(), 
-                    "NAV reached %s → switching to %s", 
-                    going_to_A_ ? "A" : "B", 
-                    going_to_A_ ? "B" : "A");
-                
-                // Toggle ke target berikutnya
-                going_to_A_ = !going_to_A_;
-                Pose2 next_target = going_to_A_ ? patrol_A_ : patrol_B_;
-                
-                // Kirim NAV berikutnya
-                goTo(next_target.x, next_target.y, next_target.th);
-                
-                RCLCPP_INFO(this->get_logger(),
-                    "NAV NEXT: goTo (%.2f, %.2f, th=%.2f) target=%s",
-                    next_target.x, next_target.y, next_target.th, 
-                    going_to_A_ ? "A" : "B");
-                
-                // Reset flags untuk cycle berikutnya
-                nav_in_progress_ = true;
-                nav_status_ready_ = false;  // ← PENTING: reset ini
-                fsm_entry_sent_ = true;      // tetap di CrossBehind
+                if (nav_status_ready_) {
+                    // EXIT: jika goal tercapai, toggle A/B dan kirim NAV lagi
+                    if (res == 3 && prev_res != res) {
+                        RCLCPP_INFO(this->get_logger(), 
+                            "NAV reached %s → switching to %s", 
+                            going_to_A_ ? "A" : "B", 
+                            going_to_A_ ? "B" : "A");
+                        
+                        going_to_A_ = !going_to_A_;
+                        Pose2 next_target = going_to_A_ ? patrol_A_ : patrol_B_;
+                        goTo(next_target.x, next_target.y, next_target.th);
+                        
+                        RCLCPP_INFO(this->get_logger(),
+                            "NAV NEXT: goTo (%.2f, %.2f, th=%.2f) target=%s",
+                            next_target.x, next_target.y, next_target.th, 
+                            going_to_A_ ? "A" : "B");
+                        
+                        nav_in_progress_ = true;
+                        nav_status_ready_ = false;
+                        fsm_entry_sent_ = true;
+                    }
+                }
             }
         }
 
+        mode_done:
         prev_res = res;
     }
 
@@ -432,10 +502,13 @@ public:
 
         const char* category = nullptr;
         if (abs_deg <= 30.0) {
+            direction_person_ = -1; // BERLAWANAN ARAH
             category = "BERLAWANAN ARAH";
         } else if (abs_deg > 30.0 && abs_deg <= 160.0) {
+            direction_person_ = 0; // MEMOTONG JALAN ORANG
             category = "MEMOTONG JALAN ORANG";
         } else { // 160–180
+            direction_person_ = 1; // SEARAH
             category = "SEARAH";
         }
 
@@ -444,36 +517,120 @@ public:
             rad2deg(robot_yaw), rad2deg(person_yaw), delta_deg, category);
     }
 
-    velocity calculateVelocityPerson()
+        velocity calculateVelocityPerson()
     {
-        velocity v;
-        v.vx = 0.0;
-        v.vy = 0.0;
+        velocity v{0.0, 0.0};
 
         if (first_uwb_ || !uwb_data_received_) {
             return v;  // belum ada data cukup
         }
 
-        // Hitung delta waktu (dt)
-        rclcpp::Time current_time = this->now();
-        double dt = (current_time - last_uwb_time_).seconds();
-
-        if (dt <= 1e-6) {  // hindari division by zero
+        double dt = (last_uwb_time_ - prev_uwb_time_).seconds();
+        if (dt <= 1e-3) {  // hindari division by zero / jitter sangat kecil
             return v;
         }
 
-        // Hitung delta posisi
         double dx = uwb_pose_.x - uwb_pose_prev_.x;
         double dy = uwb_pose_.y - uwb_pose_prev_.y;
 
-        // Velocity dalam frame global
         v.vx = dx / dt;
         v.vy = dy / dt;
+
+        // Deadband untuk noise kecil saat diam
+        const double vel_deadband = 0.02; // m/s
+        if (std::fabs(v.vx) < vel_deadband) v.vx = 0.0;
+        if (std::fabs(v.vy) < vel_deadband) v.vy = 0.0;
 
         return v;
     }
 
+     // ======================================================================================
+    // TTC (Time To Collision) Calculation
+    // ======================================================================================
+    double calculateTTC() {
+        if (!robot_info_received_ || !uwb_data_received_) {
+            return -1.0;  // data belum lengkap
+        }
 
+        // 1. Hitung velocity person
+        velocity vel_person = calculateVelocityPerson();
+        
+        // 2. Posisi relatif person terhadap robot
+        double dx = uwb_pose_.x - last_pose_.x;
+        double dy = uwb_pose_.y - last_pose_.y;
+        double distance = std::sqrt(dx * dx + dy * dy);
+
+        // 3. Robot velocity (asumsi dari robot_info atau bisa dari odometry)
+        // Untuk saat ini asumsi robot diam atau ambil dari differensiasi last_pose_
+        // Jika robot bergerak, perlu tracking pose robot sebelumnya
+        double robot_vx = 0.0;  // TODO: hitung dari robot odometry jika ada
+        double robot_vy = 0.0;
+
+        // 4. Velocity relatif (person terhadap robot)
+        double rel_vx = vel_person.vx - robot_vx;
+        double rel_vy = vel_person.vy - robot_vy;
+        double rel_speed = std::sqrt(rel_vx * rel_vx + rel_vy * rel_vy);
+
+        // 5. Hitung apakah mendekat (dot product negatif)
+        // Unit vector dari robot ke person
+        if (distance < 1e-3) {
+            return -1.0;  // terlalu dekat, tidak valid
+        }
+
+        double ux = dx / distance;
+        double uy = dy / distance;
+
+        // Proyeksi velocity relatif ke arah person-robot
+        double vel_approach = -(rel_vx * ux + rel_vy * uy);
+
+        // 6. TTC calculation
+        const double min_approach_speed = 0.05;  // m/s, threshold minimal
+        
+        if (vel_approach > min_approach_speed) {
+            // Mendekat
+            double ttc = distance / vel_approach;
+            return ttc;
+        } else if (vel_approach < -min_approach_speed) {
+            // Menjauh
+            return -2.0;  // kode khusus: menjauh
+        } else {
+            // Velocity approach sangat kecil (diam atau paralel)
+            return -3.0;  // kode khusus: tidak mendekat signifikan
+        }
+    }
+
+    // ======================================================================================
+    // Evaluate dan Log TTC
+    // ======================================================================================
+    // 
+    
+        void evaluateTTC() {
+        double ttc = calculateTTC();
+        last_ttc_ = ttc;
+
+        if (ttc > 0) {
+            // Mendekat - threshold 3 detik
+            if (ttc < 3.0) {
+                RCLCPP_WARN(this->get_logger(),
+                    "TTC: %.2f s [BAHAYA] - Person approaching robot (< 3s)",
+                    ttc);
+            } else {
+                RCLCPP_INFO(this->get_logger(),
+                    "TTC: %.2f s [AMAN] - Person approaching robot (> 3s)",
+                    ttc);
+            }
+        } else if (ttc == -2.0) {
+            RCLCPP_INFO(this->get_logger(),
+                "TTC: N/A [AMAN] - Person moving away from robot");
+        } else if (ttc == -3.0) {
+            RCLCPP_INFO(this->get_logger(),
+                "TTC: N/A [AMAN] - No significant approach (parallel/static)");
+        } else {
+            // -1.0 atau error
+            RCLCPP_DEBUG(this->get_logger(),
+                "TTC: N/A - Insufficient data or too close");
+        }
+    }
 
 
     // ======================================================================================

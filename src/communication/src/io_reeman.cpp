@@ -253,22 +253,26 @@ IOReeman() : Node("io_reeman") {
                         RCLCPP_DEBUG(this->get_logger(), "Case2: NAV sent to (%.2f, %.2f)", goal.x, goal.y);
                     }
                 }
+
+                RCLCPP_INFO(this->get_logger(), "STATE CASE_CrossBehind");
             }else if(current_fsm_state_ == 3) {
-                // Escort mode: selalu di sisi kanan person
-                geometry_msgs::msg::Pose2D goal =
-                    calculateEscortGoalRight(person, yaw, robot_xy, 0.8f, 1.0f);
+                // // Escort mode: selalu di sisi kanan person
+                // geometry_msgs::msg::Pose2D goal =
+                //     calculateEscortGoalRight(person, yaw, robot_xy, 0.8f, 1.0f);
                 
-                // Update goal setiap saat (karena person bergerak)
-                float d_goal = std::hypot(goal.x - current_goal_.x, goal.y - current_goal_.y);
-                if (!goal_active_ || d_goal > 0.05f) {  // Threshold lebih kecil untuk escort (lebih responsif)
-                    bool ok_nav = reeman_->sendNav(goal.x, goal.y, goal.theta);
-                    if (ok_nav) {
-                        current_goal_ = goal;
-                        goal_active_ = true;
-                        RCLCPP_DEBUG(this->get_logger(), "Escort: NAV sent to right (%.2f, %.2f, th=%.2f)", 
-                                    goal.x, goal.y, goal.theta);
-                    }
-                }
+                // // Update goal setiap saat (karena person bergerak)
+                // float d_goal = std::hypot(goal.x - current_goal_.x, goal.y - current_goal_.y);
+                // if (!goal_active_ || d_goal > 0.05f) {  // Threshold lebih kecil untuk escort (lebih responsif)
+                //     bool ok_nav = reeman_->sendNav(goal.x, goal.y, goal.theta);
+                //     if (ok_nav) {
+                //         current_goal_ = goal;
+                //         goal_active_ = true;
+                //         RCLCPP_DEBUG(this->get_logger(), "Escort: NAV sent to right (%.2f, %.2f, th=%.2f)", 
+                //                     goal.x, goal.y, goal.theta);
+                //     }
+                // }
+
+                RCLCPP_INFO(this->get_logger(), "STATE CASE_EscortMode");
             }
         } else {
             goal_active_ = false;
