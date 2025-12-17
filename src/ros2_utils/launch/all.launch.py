@@ -145,6 +145,30 @@ def generate_launch_description():
         respawn=True,
     )
 
+    hand_track_stop = Node(
+        package='hardware',
+        executable='hand_track.py',
+        name='hand_track_stop',
+        output='screen',
+        respawn=True,
+    )
+
+    uwb_localization = Node(
+        package='hardware',
+        executable='uwb_data_umeyama_method.py',
+        name='uwb_localization',
+        output='screen',
+        respawn=True,
+    )
+
+    dual_leg = Node(
+        package='hardware',
+        executable='dual_leg.py',
+        name='dual_leg',
+        output='log',
+        respawn=True,
+    )
+
     face_detection = Node(
         package='vision',
         executable='face_detection.py',
@@ -153,21 +177,32 @@ def generate_launch_description():
         respawn=True,
     )
 
+    convert_csv = Node(
+        package='master',
+        executable='convert_csv',
+        name='convert_csv',
+        output='screen',
+        respawn=True,
+    )
+
 
     return LaunchDescription(
         [
-            rosapi_node,
-            web_video_server,
-            ui_server,
-            rosbridge_server,
+            # rosapi_node,
+            # web_video_server,
+            # ui_server,
+            # rosbridge_server,
 
             # ==================================================
 
             # audio_controller,
             
-            # capture,
-            # hand_track,
-            # face_detection,
+            # hand_track_stop,
+            uwb_localization,
+            dual_leg,
+
+            # convert_csv,
+
 
             # telemetry,
 

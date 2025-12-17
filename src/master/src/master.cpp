@@ -3,6 +3,7 @@
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
 #include "ros2_utils/simple_fsm.hpp"
 #include "ros2_interface/msg/robot.hpp"
 #include "ros2_interface/msg/personpos.hpp"
@@ -48,8 +49,9 @@ public:
     rclcpp::Subscription<ros2_interface::msg::Robot>::SharedPtr sub_robot_info_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_status_;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_mode_;
-    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_case_state_;
+    // rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_people_sitting;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_hand_stop_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr dual_leg;
     
     // ===== Tambahkan Timer =====
     rclcpp::TimerBase::SharedPtr timer_;
@@ -104,14 +106,14 @@ public:
     bool first_uwb_{true};
 
     // status people
-    bool arePeopleSitting;
+    bool arePeopleSitting{false};  // default: berdiri
 
     // TTC tracking
     double last_ttc_{-1.0};
 
     // TIMEOUT DINAMIS STATIC
     int direction_person_{1}; // 1: SEARAH, 0: MEMOTONG JALAN ORANG, -1: BERLAWANAN ARAH
-    bool isStop{0};
+    bool isStop{0}; // 0: Hand Stop not detect, 1: Hand Stop detected
 
         // ===== TAMBAHKAN: Tracking mode dinamis/statis dengan timeout =====
     int last_motion_state_{-1};  // -1: unknown, 0: statis, 1: dinamis
@@ -191,16 +193,30 @@ public:
             }
         );
 
-        sub_button_case_state_ = this->create_subscription<std_msgs::msg::Int8>(
-            "/button/case_state", 10,
-            [this](const std_msgs::msg::Int8::SharedPtr msg) {
-                int new_case = msg->data;
-                if (new_case == 1) {
-                    arePeopleSitting = true;
-                }else if(new_case == 2){
-                    arePeopleSitting = false;
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "Unknown FSM CASE: %d", new_case);
+        // sub_people_sitting = this->create_subscription<std_msgs::msg::Int8>(
+        //     "/button/case_state", 10,
+        //     [this](const std_msgs::msg::Int8::SharedPtr msg) {
+        //         int new_case = msg->data;
+        //         if (new_case == 1) {
+        //             arePeopleSitting = true;
+        //         }else if(new_case == 2){
+        //             arePeopleSitting = false;
+        //         } else {
+        //             RCLCPP_WARN(this->get_logger(), "Unknown FSM CASE: %d", new_case);
+        //         }
+        //     }
+        // );
+
+        dual_leg = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/dual_leg", 10,
+            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+                if (msg->data.size() >= 1) {
+                    const double angle_deg = msg->data[0];
+                    const bool sitting = (angle_deg >= 0.0 && angle_deg <= 15.0);
+                    arePeopleSitting = sitting;
+                    fsm_robot.value = sitting ? CASE_SittingApproach : CASE_StandingApproach;
+                    RCLCPP_INFO(this->get_logger(), "Dual Leg Angle: %.2f deg → People %s",
+                        angle_deg, sitting ? "SITTING" : "STANDING");
                 }
             }
         );
@@ -364,7 +380,7 @@ public:
         RCLCPP_INFO(this->get_logger(),"FSM MODE %d",MODE);
         RCLCPP_INFO(this->get_logger(),"FSM CASE %d",fsm_robot.value);
 
-        // ===== STATEMENT CASE dengan TIMEOUT LOGIC ==============================================
+        //mark ===== STATEMENT CASE dengan TIMEOUT LOGIC ==============================================
         bool person_moving = isPersonMoving(v);
 
         // STATIS → DINAMIS: LANGSUNG (tanpa timeout)
@@ -388,7 +404,7 @@ public:
             }
         }
 
-        // Logic FSM berdasarkan state akhir
+        //mark Logic FSM berdasarkan state akhir ==============================================
         if (person_moving) {
             RCLCPP_INFO(this->get_logger(),"CHECK: DINAMIS");
             if(MODE == MODE_INTERACTION){
@@ -476,12 +492,9 @@ public:
                         fsm_robot.value, d, pos_th);
                     nav_in_progress_ = false;
 
-                    // Toggle Sitting ↔ Standing
-                    if (fsm_robot.value == CASE_SittingApproach) {
-                        fsm_robot.value = CASE_StandingApproach;
-                    } else {
-                        fsm_robot.value = CASE_SittingApproach;
-                    }
+                    // SET sesuai arePeopleSitting (0–15° → Sitting(1), else → Standing(2))
+                    fsm_robot.value = arePeopleSitting ? CASE_SittingApproach : CASE_StandingApproach;
+
                     fsm_entry_sent_ = false;
                     nav_status_ready_ = false;
                 }

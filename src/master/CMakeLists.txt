@@ -17,6 +17,8 @@ find_package(nlohmann_json REQUIRED)
 # Master node executable
 add_executable(master src/master.cpp)
 
+add_executable(convert_csv src/convert_csv.cpp)
+
 ament_target_dependencies(master
   rclcpp
   geometry_msgs
@@ -25,11 +27,23 @@ ament_target_dependencies(master
   ros2_interface
 )
 
+ament_target_dependencies(convert_csv
+  rclcpp
+  geometry_msgs
+  ros2_interface
+)
+
 target_link_libraries(master nlohmann_json::nlohmann_json)
 
 install(TARGETS
   master
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS
+  convert_csv 
+  DESTINATION
+  lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
