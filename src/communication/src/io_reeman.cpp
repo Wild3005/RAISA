@@ -198,7 +198,14 @@ IOReeman() : Node("io_reeman") {
                 pending_segments_ = calculateLineSegments(x, y, yaw, radius, 2.00);
                 pending_vwall_ = true;
             }
-        }else if(current_fsm_state_ == 3 || current_fsm_state_ == 4 || current_fsm_state_ == 5 || current_fsm_state_ == 6 || current_fsm_state_ == 7){
+        }else if(current_fsm_state_ == 3){
+            {
+                std::lock_guard<std::mutex> lock(vwall_mutex_);
+                pending_segments_ = calculateEscortMode(x, y, yaw, radius);
+                pending_vwall_ = true;
+            }
+        }
+        else if(current_fsm_state_ == 4 || current_fsm_state_ == 5 || current_fsm_state_ == 6 || current_fsm_state_ == 7){
             {
                 std::lock_guard<std::mutex> lock(vwall_mutex_);
                 pending_segments_ = calculateCircleSegmentsWithDiagonals(x, y, yaw, radius);
@@ -244,21 +251,21 @@ IOReeman() : Node("io_reeman") {
 
             }else if(current_fsm_state_ == 2) {
                 
-                geometry_msgs::msg::Pose2D goal;
-                goal.x = 0.0;
-                goal.y = 0.0;
-                goal.theta = 1.6;
+                // geometry_msgs::msg::Pose2D goal;
+                // goal.x = 0.0;
+                // goal.y = 0.0;
+                // goal.theta = 1.6;
 
-                // Kirim NAV hanya jika belum aktif atau jarak ke goal berubah signifikan
-                float d_goal = std::hypot(goal.x - current_goal_.x, goal.y - current_goal_.y);
-                if (!goal_active_ || d_goal > 0.10f) {
-                    bool ok_nav = reeman_->sendNav(goal.x, goal.y, goal.theta);
-                    if (ok_nav) {
-                        current_goal_ = goal;
-                        goal_active_ = true;
-                        RCLCPP_DEBUG(this->get_logger(), "Case2: NAV sent to (%.2f, %.2f)", goal.x, goal.y);
-                    }
-                }
+                // // Kirim NAV hanya jika belum aktif atau jarak ke goal berubah signifikan
+                // float d_goal = std::hypot(goal.x - current_goal_.x, goal.y - current_goal_.y);
+                // if (!goal_active_ || d_goal > 0.10f) {
+                //     bool ok_nav = reeman_->sendNav(goal.x, goal.y, goal.theta);
+                //     if (ok_nav) {
+                //         current_goal_ = goal;
+                //         goal_active_ = true;
+                //         RCLCPP_DEBUG(this->get_logger(), "Case2: NAV sent to (%.2f, %.2f)", goal.x, goal.y);
+                //     }
+                // }
 
                 RCLCPP_INFO(this->get_logger(), "STATE CASE_CrossBehind");
             }else if(current_fsm_state_ == 3) {
@@ -555,6 +562,39 @@ IOReeman() : Node("io_reeman") {
 
         segments.push_back(VirtualWallSegment{ p_d1a.x, p_d1a.y, p_d1b.x, p_d1b.y }); // diagonal 1
         segments.push_back(VirtualWallSegment{ p_d2a.x, p_d2a.y, p_d2b.x, p_d2b.y }); // diagonal 2
+
+        return segments;
+    }
+
+    // Helper: kotak (front/right/back = radius; kiri total 2 m)
+    std::vector<VirtualWallSegment> calculateEscortMode(float cx, float cy, float yaw, float radius) {
+        float yaw_fixed = -yaw;
+
+        std::vector<VirtualWallSegment> segments;
+        float c = std::cos(yaw_fixed);
+        float s = std::sin(yaw_fixed);
+
+        auto rot = [&](float xl, float yl) -> Point {
+            return { cx + c * xl - s * yl,
+                     cy + s * xl + c * yl };
+        };
+
+        // Setengah panjang untuk masing-masing sisi
+        float half_x = radius * 0.5f;   // depan & belakang (sumbu X)
+        float half_left = 5.0f; // kanan (Y+)
+        float half_right = radius * 0.5f;         // kiri (Y-) total 2 m
+
+        // Sudut kotak (CCW) dengan X=front/back, Y=right/left
+        Point p_fr = rot( +half_x, +half_left );  // front-right
+        Point p_fl = rot( +half_x, -half_right  );  // front-left (kiri diperpanjang)
+        Point p_bl = rot( -half_x, -half_right  );  // back-left
+        Point p_br = rot( -half_x, +half_left );  // back-right
+
+        // Empat sisi kotak
+        segments.push_back({p_fr.x, p_fr.y, p_fl.x, p_fl.y}); // sisi depan
+        segments.push_back({p_fl.x, p_fl.y, p_bl.x, p_bl.y}); // sisi kiri (panjang)
+        segments.push_back({p_bl.x, p_bl.y, p_br.x, p_br.y}); // sisi belakang
+        segments.push_back({p_br.x, p_br.y, p_fr.x, p_fr.y}); // sisi kanan
 
         return segments;
     }
