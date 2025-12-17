@@ -118,6 +118,18 @@ public:
     rclcpp::Time last_motion_change_time_;
     const double DYNAMIC_TO_STATIC_TIMEOUT_ = 1.0;  // 1 detik timeout
 
+    // goal tracking
+    geometry_msgs::msg::Pose2D last_goal_{};  // goal yang di-cancel
+    geometry_msgs::msg::Pose2D current_goal_{};
+    bool goal_cancelled_{false};  // flag untuk tracking goal cancel
+    const double SAFE_DISTANCE_THRESHOLD_ = 1.0;  // 2 meter threshold
+
+    // Active-Yield (minggir) state
+    geometry_msgs::msg::Pose2D pull_over_goal_{};
+    int pull_over_stage_{0};  // 0: idle, 1: go-to-side, 2: waiting clearance
+    const double PULL_OVER_LAT_OFFSET_ = 0.7;  // meter ke kanan/kiri
+    const double PULL_OVER_FWD_OFFSET_ = 0.0;  // meter maju (opsional)
+
     MasterNode() : Node("master") {
         RCLCPP_INFO(this->get_logger(), "MasterNode initialized.");
         
@@ -345,7 +357,7 @@ public:
         // ===== SELALU JALANKAN (tidak ada return) =====
         evaluateRelativeYawPersonVsRobot();
         velocity v = calculateVelocityPerson();
-        int isTTCDangerous = evaluateTTC(); // -1 = tidak valid, 0 = aman, 1 = bahaya
+        int isTTCDangerous = evaluateTTC();
 
         RCLCPP_INFO(this->get_logger(),"Person VEL X %.2f Y %.2f m/s", v.vx, v.vy);
         RCLCPP_INFO(this->get_logger(),"RES %d || RES PREV %d",res, prev_res);
@@ -372,29 +384,28 @@ public:
                 double remaining = DYNAMIC_TO_STATIC_TIMEOUT_ - 
                     (this->now() - last_motion_change_time_).seconds();
                 RCLCPP_INFO(this->get_logger(), "WAITING TIMEOUT: %.2f s remaining", remaining);
-                // Pertahankan state dinamis sampai timeout
                 person_moving = true;
             }
         }
 
         // Logic FSM berdasarkan state akhir
-        if (person_moving) { // PERSON BERGERAK (dinamis)
+        if (person_moving) {
             RCLCPP_INFO(this->get_logger(),"CHECK: DINAMIS");
             if(MODE == MODE_INTERACTION){
                 RCLCPP_INFO(this->get_logger(),"PLEASE SWITCH TO NAVIGATION MODE");
             }
             else{
-                if(direction_person_ == 1){ // SEARAH
+                if(direction_person_ == 1){
                     fsm_robot.value = CASE_EscortMode;
                     RCLCPP_INFO(this->get_logger(),"CHECK: SEARAH");
-                }else if(direction_person_ == 0){ // MEMOTONG JALAN ORANG
+                }else if(direction_person_ == 0){
                     if(isTTCDangerous == 1){
                         fsm_robot.value = CASE_StopAndWait; 
                     }else{
                         fsm_robot.value = CASE_ProceedCaution;
                     }
                     RCLCPP_INFO(this->get_logger(),"CHECK: MEMOTONG JALAN ORANG");
-                }else if(direction_person_ == -1){ // BERLAWANAN ARAH
+                }else if(direction_person_ == -1){
                     if(isStop){
                         fsm_robot.value = CASE_ActiveYealding; 
                     }else{
@@ -403,7 +414,7 @@ public:
                     RCLCPP_INFO(this->get_logger(),"CHECK: BERLAWANAN ARAH");
                 }
             }
-        }else{ // PERSON DIAM (statis)
+        }else{
             RCLCPP_INFO(this->get_logger(),"CHECK: STATIS");
             if(MODE == MODE_NAVIGATION){
                 fsm_robot.value = CASE_CrossBehind;
@@ -478,54 +489,162 @@ public:
         }
         else if (MODE == MODE_NAVIGATION) {
             auto radius_for_state = [&](int st) -> float {
-            switch (st) {
-                case CASE_CrossBehind:       return 0.6f;
-                case CASE_EscortMode:        return 0.3f;
-                case CASE_ActiveYealding:    return 2.0f;
-                case CASE_StandartPassing:   return 1.3f;
-                case CASE_StopAndWait:       return 1.5f;
-                case CASE_ProceedCaution:    return 1.0f;
-                default:                     return 0.0f;
+                switch (st) {
+                    case CASE_CrossBehind:       return 0.6f;
+                    case CASE_EscortMode:        return 0.3f;
+                    case CASE_ActiveYealding:    return 2.0f;
+                    case CASE_StandartPassing:   return 1.3f;
+                    case CASE_StopAndWait:       return 1.5f;
+                    case CASE_ProceedCaution:    return 1.0f;
+                    default:                     return 0.0f;
                 }
             };
             float rad = radius_for_state(fsm_robot.value);
             Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
 
-            // ENTRY untuk CrossBehind
-            if (!fsm_entry_sent_) {
-                Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
-                Pose2 target = going_to_A_ ? patrol_A_ : patrol_B_;
-                goTo(target.x, target.y, target.th);
-                nav_in_progress_ = true;
-                RCLCPP_INFO(this->get_logger(),
-                    "NAV ENTRY: CrossBehind → goTo (%.2f, %.2f, th=%.2f) target=%s",
-                    target.x, target.y, target.th, going_to_A_ ? "A" : "B");
-                fsm_entry_sent_ = true;
-                nav_status_ready_ = false;
-            } else {
-                // MONITOR: terus update virtual wall dari UWB
-                Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
+            // ===== ACTIVE YIELDING (MINGGIR KANAN/KIRI) =====
+            if (fsm_robot.value == CASE_ActiveYealding) {
+                // 1) Pastikan goal aktif disimpan dan batalkan nav
+                if (pull_over_stage_ == 0) {
+                    if (!goal_cancelled_) {
+                        last_goal_ = current_goal_;
+                        cancelNav();
+                        goal_cancelled_ = true;
+                        RCLCPP_INFO(this->get_logger(), "ACTIVE YIELD: Cancel current nav and save last_goal");
+                    }
 
-                if (nav_status_ready_) {
-                    // EXIT: jika goal tercapai, toggle A/B dan kirim NAV lagi
-                    if (res == 3 && prev_res != res) {
-                        RCLCPP_INFO(this->get_logger(), 
-                            "NAV reached %s → switching to %s", 
-                            going_to_A_ ? "A" : "B", 
-                            going_to_A_ ? "B" : "A");
-                        
-                        going_to_A_ = !going_to_A_;
-                        Pose2 next_target = going_to_A_ ? patrol_A_ : patrol_B_;
-                        goTo(next_target.x, next_target.y, next_target.th);
-                        
+                    // 2) Tentukan sisi orang relatif robot (y_rel > 0 → kiri, <0 → kanan)
+                    double dx = uwb_pose_.x - last_pose_.x;
+                    double dy = uwb_pose_.y - last_pose_.y;
+                    double yaw = last_pose_.theta;
+
+                    // double x_rel =  std::cos(yaw) * dx + std::sin(yaw) * dy;
+                    double y_rel = -std::sin(yaw) * dx + std::cos(yaw) * dy;
+
+                    int lateral_sign = -1; // default prefer ke kanan
+                    const double eps = 0.05;
+                    if (y_rel > eps) {         // orang di kiri → robot minggir ke kanan
+                        lateral_sign = -1;
+                    } else if (y_rel < -eps) { // orang di kanan → robot minggir ke kiri
+                        lateral_sign =  1;
+                    } else {
+                        lateral_sign = -1;     // sumbu sama → prefer kanan
+                    }
+
+                    double off_x = PULL_OVER_FWD_OFFSET_;
+                    double off_y = lateral_sign * PULL_OVER_LAT_OFFSET_;
+
+                    // ke world frame
+                    double dxw = std::cos(yaw) * off_x - std::sin(yaw) * off_y;
+                    double dyw = std::sin(yaw) * off_x + std::cos(yaw) * off_y;
+
+                    pull_over_goal_.x = last_pose_.x + dxw;
+                    pull_over_goal_.y = last_pose_.y + dyw;
+                    pull_over_goal_.theta = yaw;
+
+                    // 3) Kirim goal minggir
+                    goTo(pull_over_goal_.x, pull_over_goal_.y, pull_over_goal_.theta);
+                    current_goal_ = pull_over_goal_;
+                    pull_over_stage_ = 1;
+                    nav_in_progress_ = true;
+                    RCLCPP_INFO(this->get_logger(),
+                        "ACTIVE YIELD: sidestep to (%.2f, %.2f, %.2f) y_rel=%.2f",
+                        pull_over_goal_.x, pull_over_goal_.y, pull_over_goal_.theta, y_rel);
+                }
+                // 4) Cek sampai ke posisi minggir
+                else if (pull_over_stage_ == 1) {
+                    double d = dist2d(last_pose_.x, last_pose_.y, pull_over_goal_.x, pull_over_goal_.y);
+                    if (d <= 0.25) {
+                        pull_over_stage_ = 2;  // mulai menunggu clear
+                        RCLCPP_INFO(this->get_logger(), "ACTIVE YIELD: reached side position, waiting clearance...");
+                    }
+                }
+                // 5) Menunggu hingga orang cukup jauh, lalu lanjutkan last_goal
+                else if (pull_over_stage_ == 2) {
+                    double dist_to_person = dist2d(last_pose_.x, last_pose_.y, uwb_pose_.x, uwb_pose_.y);
+                    if (dist_to_person >= SAFE_DISTANCE_THRESHOLD_) {
                         RCLCPP_INFO(this->get_logger(),
-                            "NAV NEXT: goTo (%.2f, %.2f, th=%.2f) target=%s",
-                            next_target.x, next_target.y, next_target.th, 
-                            going_to_A_ ? "A" : "B");
-                        
+                            "ACTIVE YIELD: safe distance (>= %.2f m). Resuming last goal (%.2f, %.2f, %.2f)",
+                            SAFE_DISTANCE_THRESHOLD_, last_goal_.x, last_goal_.y, last_goal_.theta);
+
+                        goTo(last_goal_.x, last_goal_.y, last_goal_.theta);
+                        current_goal_ = last_goal_;
+                        goal_cancelled_ = false;
                         nav_in_progress_ = true;
-                        nav_status_ready_ = false;
+
+                        // reset state dan kembali ke nav normal
+                        pull_over_stage_ = 0;
+                        fsm_robot.value = CASE_CrossBehind;
+                    }
+                }
+
+                // blok ActiveYield selesai → lewati blok nav normal
+            }
+            // ===== STOP AND WAIT LOGIC (tetap) =====
+            else if (fsm_robot.value == CASE_StopAndWait) {
+                if (!goal_cancelled_) {
+                    RCLCPP_INFO(this->get_logger(), "STOP AND WAIT: Cancelling navigation");
+                    last_goal_ = current_goal_;
+                    cancelNav();
+                    goal_cancelled_ = true;
+                    fsm_entry_sent_ = false;
+                } else {
+                    double dist_to_person = dist2d(last_pose_.x, last_pose_.y, uwb_pose_.x, uwb_pose_.y);
+                    RCLCPP_INFO(this->get_logger(),
+                        "STOP AND WAIT: Distance to person = %.2f m (threshold=%.2f m)",
+                        dist_to_person, SAFE_DISTANCE_THRESHOLD_);
+                    if (dist_to_person >= SAFE_DISTANCE_THRESHOLD_) {
+                        RCLCPP_INFO(this->get_logger(),
+                            "STOP AND WAIT: Safe distance reached! Resuming goal (%.2f, %.2f, %.2f)",
+                            last_goal_.x, last_goal_.y, last_goal_.theta);
+                        goTo(last_goal_.x, last_goal_.y, last_goal_.theta);
+                        current_goal_ = last_goal_;
+                        goal_cancelled_ = false;
+                        nav_in_progress_ = true;
                         fsm_entry_sent_ = true;
+                    }
+                }
+            }
+            // ===== NAV NORMAL (ENTRY/MONITOR) =====
+            else {
+                if (!fsm_entry_sent_) {
+                    Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
+                    Pose2 target = going_to_A_ ? patrol_A_ : patrol_B_;
+                    goTo(target.x, target.y, target.th);
+                    current_goal_.x = target.x;
+                    current_goal_.y = target.y;
+                    current_goal_.theta = target.th;
+                    nav_in_progress_ = true;
+                    RCLCPP_INFO(this->get_logger(),
+                        "NAV ENTRY: CrossBehind → goTo (%.2f, %.2f, th=%.2f) target=%s",
+                        target.x, target.y, target.th, going_to_A_ ? "A" : "B");
+                    fsm_entry_sent_ = true;
+                    nav_status_ready_ = false;
+                } else {
+                    Pose_person(uwb_pose_.x, uwb_pose_.y, uwb_pose_.theta, rad);
+
+                    if (nav_status_ready_) {
+                        if (res == 3 && prev_res != res) {
+                            RCLCPP_INFO(this->get_logger(),
+                                "NAV reached %s → switching to %s",
+                                going_to_A_ ? "A" : "B", going_to_A_ ? "B" : "A");
+
+                            going_to_A_ = !going_to_A_;
+                            Pose2 next_target = going_to_A_ ? patrol_A_ : patrol_B_;
+                            goTo(next_target.x, next_target.y, next_target.th);
+                            current_goal_.x = next_target.x;
+                            current_goal_.y = next_target.y;
+                            current_goal_.theta = next_target.th;
+
+                            RCLCPP_INFO(this->get_logger(),
+                                "NAV NEXT: goTo (%.2f, %.2f, th=%.2f) target=%s",
+                                next_target.x, next_target.y, next_target.th,
+                                going_to_A_ ? "A" : "B");
+
+                            nav_in_progress_ = true;
+                            nav_status_ready_ = false;
+                            fsm_entry_sent_ = true;
+                        }
                     }
                 }
             }
@@ -629,7 +748,6 @@ public:
         // 4. Velocity relatif (person terhadap robot)
         double rel_vx = vel_person.vx - robot_vx;
         double rel_vy = vel_person.vy - robot_vy;
-        double rel_speed = std::sqrt(rel_vx * rel_vx + rel_vy * rel_vy);
 
         // 5. Hitung apakah mendekat (dot product negatif)
         // Unit vector dari robot ke person
