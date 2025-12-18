@@ -38,7 +38,7 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.250",
+                "reeman_ros_ip": "10.7.101.172",
                 "min_request_period_speed_ms": 500,
                 "polling_period_ms": 1000,
 
@@ -99,7 +99,7 @@ def generate_launch_description():
         name='master',
         output='screen',
         respawn=True,
-        prefix='nice -n -10',
+        # prefix='nice -n -10',
     )
 
     keyboard_input = Node(
@@ -188,16 +188,16 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            # rosapi_node,
-            # web_video_server,
-            # ui_server,
-            # rosbridge_server,
+            rosapi_node,
+            web_video_server,
+            ui_server,
+            rosbridge_server,
 
             # ==================================================
 
             # audio_controller,
             
-            # hand_track_stop,
+            hand_track_stop,
             uwb_localization,
             dual_leg,
 

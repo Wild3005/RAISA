@@ -14,6 +14,8 @@ find_package(cv_bridge REQUIRED)
 
 install(PROGRAMS
   script/hand_track.py
+  script/dual_leg.py
+  script/uwb_data_umeyama_method.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

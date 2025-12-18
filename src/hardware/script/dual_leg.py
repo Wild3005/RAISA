@@ -17,6 +17,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64
 from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Int8
 
 
 # UDP settings - LEFT LEG
@@ -44,6 +45,8 @@ right_angle = 0.0
 left_connected = False
 right_connected = False
 last_update = time.time()
+
+data_indicator = 0
 
 def receive_left_leg():
     """Thread to receive data from LEFT LEG"""
@@ -105,7 +108,7 @@ def receive_right_leg():
 
 def display_thread():
     """Thread to display both angles side by side"""
-    global left_angle, right_angle, left_packet_count, right_packet_count, last_update
+    global left_angle, right_angle, left_packet_count, right_packet_count, last_update, data_indicator
     
     while True:
         try:
@@ -115,15 +118,21 @@ def display_thread():
             
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
             
-            # Status indicators
-            left_status = "●" if left_connected else "○"
-            right_status = "●" if right_connected else "○"
+            # # Status indicators
+            # left_status = "●" if left_connected else "○"
+            # right_status = "●" if right_connected else "○"
             
-            # Display both legs side by side with status
-            left_str = f"{left_status} LEFT: {left_angle:7.2f}° ({left_pps:5.1f} pkt/s)" if left_connected else f"{left_status} LEFT: WAITING..."
-            right_str = f"{right_status} RIGHT: {right_angle:7.2f}° ({right_pps:5.1f} pkt/s)" if right_connected else f"{right_status} RIGHT: WAITING..."
+            # # Display both legs side by side with status
+            # left_str = f"{left_status} LEFT: {left_angle:7.2f}° ({left_pps:5.1f} pkt/s)" if left_connected else f"{left_status} LEFT: WAITING..."
+            # right_str = f"{right_status} RIGHT: {right_angle:7.2f}° ({right_pps:5.1f} pkt/s)" if right_connected else f"{right_status} RIGHT: WAITING..."
             
-            print(f"[{timestamp}] {left_str} | {right_str}    ", end='\r')
+            # print(f"[{timestamp}] {left_str} | {right_str} | data_indicator={data_indicator}    ", end='\r')
+
+            # ===== Update data_indicator =====
+            if (left_angle >= 0.0 and left_angle < 15.0) or (right_angle >= 0.0 and right_angle < 15.0):
+                data_indicator = 2  # Standing (orang berdiri)
+            else:
+                data_indicator = 1  # Sitting (orang duduk)
             
             time.sleep(0.05)  # Update display 20 times per second
             
@@ -131,23 +140,36 @@ def display_thread():
             print(f"\n[DISPLAY] Error: {e}")
             break
 
-class publisher(Node):
+class DualLegPublisher(Node):
     def __init__(self):
         super().__init__("dual_leg_publisher")
-        self.pub = self.create_publisher(Float32MultiArray, "dual_leg", 1)
+        
+        # Publisher untuk Float32MultiArray (angle data)
+        self.pub_angles = self.create_publisher(Float32MultiArray, "/dual_leg", 1)
+        
+        # Publisher untuk Int8 (data_indicator: sitting/standing)
+        self.pub_indicator = self.create_publisher(Int8, "/button/case_state", 1)
+        
         timer_period = 0.3
         self.timer = self.create_timer(timer_period, self.callback)
 
     def callback(self):
-        msg = Float32MultiArray()
+        global left_angle, right_angle, data_indicator
+        
+        # ===== Publish angle data =====
+        msg_angles = Float32MultiArray()
+        msg_angles.data = [left_angle, right_angle]
+        self.pub_angles.publish(msg_angles)
 
-        left = (left_angle)
-        right = (right_angle)
-
-        # data[0] = left leg, data[1] = right leg
-        msg.data = [left, right]
-
-        self.pub.publish(msg)
+        # ===== Publish data_indicator =====
+        msg_indicator = Int8()
+        msg_indicator.data = int(data_indicator)
+        self.pub_indicator.publish(msg_indicator)
+        
+        self.get_logger().debug(
+            f"Published: angles=[{left_angle:.2f}°, {right_angle:.2f}°], "
+            f"indicator={data_indicator}"
+        )
 
 def main(args=None):
     global left_command_socket, right_command_socket
@@ -171,7 +193,12 @@ def main(args=None):
     display.start()
 
     rclpy.init(args=args)
-    dual_leg_pub = publisher()
+    dual_leg_pub = DualLegPublisher()
+    
+    print("\n✓ ROS2 Publishers initialized:")
+    print(f"  - /dual_leg (Float32MultiArray): angle data")
+    print(f"  - /button/case_state (Int8): data_indicator (0=Standing, 1=Sitting)")
+    
     rclpy.spin(dual_leg_pub)
     
     try:

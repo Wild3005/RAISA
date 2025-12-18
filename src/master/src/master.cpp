@@ -3,7 +3,6 @@
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
 #include "ros2_utils/simple_fsm.hpp"
 #include "ros2_interface/msg/robot.hpp"
 #include "ros2_interface/msg/personpos.hpp"
@@ -49,9 +48,8 @@ public:
     rclcpp::Subscription<ros2_interface::msg::Robot>::SharedPtr sub_robot_info_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_status_;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_button_mode_;
-    // rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_people_sitting;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_people_sitting;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_hand_stop_;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr dual_leg;
     
     // ===== Tambahkan Timer =====
     rclcpp::TimerBase::SharedPtr timer_;
@@ -106,7 +104,7 @@ public:
     bool first_uwb_{true};
 
     // status people
-    bool arePeopleSitting{false};  // default: berdiri
+    bool arePeopleSitting;
 
     // TTC tracking
     double last_ttc_{-1.0};
@@ -193,30 +191,16 @@ public:
             }
         );
 
-        // sub_people_sitting = this->create_subscription<std_msgs::msg::Int8>(
-        //     "/button/case_state", 10,
-        //     [this](const std_msgs::msg::Int8::SharedPtr msg) {
-        //         int new_case = msg->data;
-        //         if (new_case == 1) {
-        //             arePeopleSitting = true;
-        //         }else if(new_case == 2){
-        //             arePeopleSitting = false;
-        //         } else {
-        //             RCLCPP_WARN(this->get_logger(), "Unknown FSM CASE: %d", new_case);
-        //         }
-        //     }
-        // );
-
-        dual_leg = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-            "/dual_leg", 10,
-            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-                if (msg->data.size() >= 1) {
-                    const double angle_deg = msg->data[0];
-                    const bool sitting = (angle_deg >= 0.0 && angle_deg <= 15.0);
-                    arePeopleSitting = sitting;
-                    fsm_robot.value = sitting ? CASE_SittingApproach : CASE_StandingApproach;
-                    RCLCPP_INFO(this->get_logger(), "Dual Leg Angle: %.2f deg → People %s",
-                        angle_deg, sitting ? "SITTING" : "STANDING");
+        sub_people_sitting = this->create_subscription<std_msgs::msg::Int8>(
+            "/button/case_state", 10,
+            [this](const std_msgs::msg::Int8::SharedPtr msg) {
+                int new_case = msg->data;
+                if (new_case == 1) {
+                    arePeopleSitting = true;
+                }else if(new_case == 2){
+                    arePeopleSitting = false;
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Unknown FSM CASE: %d", new_case);
                 }
             }
         );
@@ -492,9 +476,12 @@ public:
                         fsm_robot.value, d, pos_th);
                     nav_in_progress_ = false;
 
-                    // SET sesuai arePeopleSitting (0–15° → Sitting(1), else → Standing(2))
-                    fsm_robot.value = arePeopleSitting ? CASE_SittingApproach : CASE_StandingApproach;
-
+                    // Toggle Sitting ↔ Standing
+                    if (fsm_robot.value == CASE_SittingApproach) {
+                        fsm_robot.value = CASE_StandingApproach;
+                    } else {
+                        fsm_robot.value = CASE_SittingApproach;
+                    }
                     fsm_entry_sent_ = false;
                     nav_status_ready_ = false;
                 }

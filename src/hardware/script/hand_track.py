@@ -22,8 +22,8 @@ mp_drawing = mp.solutions.drawing_utils
 # =======================
 MAX_COOLDOWN_HAND_ACTION = 100
 # CAMERA_INDEX = 0
-# CAMERA_INDEX = '/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_078E232F-video-index0'
-CAMERA_INDEX = '/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_3BD7DCCF-video-index0' #path cam robt raisa
+CAMERA_INDEX = '/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_078E232F-video-index0'
+# CAMERA_INDEX = '/dev/v4l/by-id/usb-046d_C922_Pro_Stream_Webcam_3BD7DCCF-video-index0' #path cam robt raisa
 FPS = 30.0
 
 
