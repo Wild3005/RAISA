@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+
+"""
+Dual UDP Receiver for AS5600 Sensor Data from ESP32
+Receives angle data from LEFT LEG and RIGHT LEG via UDP
+"""
+
+import socket
+import sys
+import time
+import struct
+import threading
+from datetime import datetime
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float64
+from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Int8
+
+
+# UDP settings - LEFT LEG
+UDP_IP_LEFT = "0.0.0.0"
+UDP_PORT_LEFT = 12345
+
+# UDP settings - RIGHT LEG  
+UDP_IP_RIGHT = "0.0.0.0"
+UDP_PORT_RIGHT = 12346
+
+# Global variables for command sending
+left_leg_address = None
+right_leg_address = None
+left_command_socket = None
+right_command_socket = None
+
+# Statistics
+left_packet_count = 0
+right_packet_count = 0
+start_time = time.time()
+
+# Shared data for display
+left_angle = 0.0
+right_angle = 0.0
+left_connected = False
+right_connected = False
+last_update = time.time()
+
+data_indicator = 0
+
+def receive_left_leg():
+    """Thread to receive data from LEFT LEG"""
+    global left_leg_address, left_packet_count, left_angle, left_connected
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((UDP_IP_LEFT, UDP_PORT_LEFT))
+    
+    print(f"[LEFT LEG] Listening on port {UDP_PORT_LEFT}")
+    
+    while True:
+        try:
+            data, addr = sock.recvfrom(1024)
+            
+            # Store address for sending commands back
+            if left_leg_address != addr:
+                left_leg_address = addr
+                left_connected = True
+                print(f"\n✓ [LEFT LEG] Connected from {addr[0]}:{addr[1]}\n")
+            
+            left_packet_count += 1
+            
+            # Decode binary data (4 bytes float)
+            if len(data) == 4:
+                left_angle = struct.unpack('f', data)[0]
+                
+        except Exception as e:
+            print(f"\n[LEFT LEG] Error: {e}")
+            break
+
+def receive_right_leg():
+    """Thread to receive data from RIGHT LEG"""
+    global right_leg_address, right_packet_count, right_angle, right_connected
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((UDP_IP_RIGHT, UDP_PORT_RIGHT))
+    
+    print(f"[RIGHT LEG] Listening on port {UDP_PORT_RIGHT}")
+    
+    while True:
+        try:
+            data, addr = sock.recvfrom(1024)
+            
+            # Store address for sending commands back
+            if right_leg_address != addr:
+                right_leg_address = addr
+                right_connected = True
+                print(f"\n✓ [RIGHT LEG] Connected from {addr[0]}:{addr[1]}\n")
+            
+            right_packet_count += 1
+            
+            # Decode binary data (4 bytes float)
+            if len(data) == 4:
+                right_angle = struct.unpack('f', data)[0]
+                
+        except Exception as e:
+            print(f"\n[RIGHT LEG] Error: {e}")
+            break
+
+def display_thread():
+    """Thread to display both angles side by side"""
+    global left_angle, right_angle, left_packet_count, right_packet_count, last_update, data_indicator
+    
+    while True:
+        try:
+            elapsed = time.time() - start_time
+            left_pps = left_packet_count / elapsed if elapsed > 0 else 0
+            right_pps = right_packet_count / elapsed if elapsed > 0 else 0
+            
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            
+            # # Status indicators
+            # left_status = "●" if left_connected else "○"
+            # right_status = "●" if right_connected else "○"
+            
+            # # Display both legs side by side with status
+            # left_str = f"{left_status} LEFT: {left_angle:7.2f}° ({left_pps:5.1f} pkt/s)" if left_connected else f"{left_status} LEFT: WAITING..."
+            # right_str = f"{right_status} RIGHT: {right_angle:7.2f}° ({right_pps:5.1f} pkt/s)" if right_connected else f"{right_status} RIGHT: WAITING..."
+            
+            # print(f"[{timestamp}] {left_str} | {right_str} | data_indicator={data_indicator}    ", end='\r')
+
+            # ===== Update data_indicator =====
+            if (left_angle >= 0.0 and left_angle < 15.0) or (right_angle >= 0.0 and right_angle < 15.0):
+                data_indicator = 2  # Standing (orang berdiri)
+            else:
+                data_indicator = 1  # Sitting (orang duduk)
+            
+            time.sleep(0.05)  # Update display 20 times per second
+            
+        except Exception as e:
+            print(f"\n[DISPLAY] Error: {e}")
+            break
+
+class DualLegPublisher(Node):
+    def __init__(self):
+        super().__init__("dual_leg_publisher")
+        
+        # Publisher untuk Float32MultiArray (angle data)
+        self.pub_angles = self.create_publisher(Float32MultiArray, "/dual_leg", 1)
+        
+        # Publisher untuk Int8 (data_indicator: sitting/standing)
+        self.pub_indicator = self.create_publisher(Int8, "/button/case_state", 1)
+        
+        timer_period = 0.3
+        self.timer = self.create_timer(timer_period, self.callback)
+
+    def callback(self):
+        global left_angle, right_angle, data_indicator
+        
+        # ===== Publish angle data =====
+        msg_angles = Float32MultiArray()
+        msg_angles.data = [left_angle, right_angle]
+        self.pub_angles.publish(msg_angles)
+
+        # ===== Publish data_indicator =====
+        msg_indicator = Int8()
+        msg_indicator.data = int(data_indicator)
+        self.pub_indicator.publish(msg_indicator)
+        
+        self.get_logger().debug(
+            f"Published: angles=[{left_angle:.2f}°, {right_angle:.2f}°], "
+            f"indicator={data_indicator}"
+        )
+
+def main(args=None):
+    global left_command_socket, right_command_socket
+    
+    # Create UDP sockets for sending commands
+    left_command_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    right_command_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    print("=" * 70)
+    print("Dual UDP Receiver for AS5600 Sensors - LEFT & RIGHT LEG")
+    print("=" * 70)
+    print("Waiting for data from both ESP32 devices...")
+    
+    # Start receiver threads
+    left_thread = threading.Thread(target=receive_left_leg, daemon=True)
+    right_thread = threading.Thread(target=receive_right_leg, daemon=True)
+    display = threading.Thread(target=display_thread, daemon=True)
+    
+    left_thread.start()
+    right_thread.start()
+    display.start()
+
+    rclpy.init(args=args)
+    dual_leg_pub = DualLegPublisher()
+    
+    print("\n✓ ROS2 Publishers initialized:")
+    print(f"  - /dual_leg (Float32MultiArray): angle data")
+    print(f"  - /button/case_state (Int8): data_indicator (0=Standing, 1=Sitting)")
+    
+    rclpy.spin(dual_leg_pub)
+    
+    try:
+        # Keep main thread alive
+        while True:
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\n\nStopping UDP receivers...")
+        elapsed = time.time() - start_time
+        print(f"\n" + "=" * 70)
+        print("Statistics:")
+        print(f"  LEFT LEG  - Total: {left_packet_count:,} packets | Avg: {left_packet_count/elapsed:.1f} pkt/s")
+        print(f"  RIGHT LEG - Total: {right_packet_count:,} packets | Avg: {right_packet_count/elapsed:.1f} pkt/s")
+        print(f"  Runtime: {elapsed:.1f} seconds")
+        print("=" * 70)
+        
+    finally:
+        if left_command_socket:
+            left_command_socket.close()
+        if right_command_socket:
+            right_command_socket.close()
+        print("Sockets closed")
+    
+    dual_leg_pub.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

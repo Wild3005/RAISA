@@ -24,6 +24,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Charge.srv"
 
   "msg/Robot.msg"
+  "msg/Personpos.msg"
 
   DEPENDENCIES
   geometry_msgs

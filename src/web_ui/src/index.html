@@ -1,53 +1,89 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-  <title>ROS2 Template UI</title>
-  <link rel="stylesheet" href="./bulma.min.css">
-  <link rel="stylesheet" href="./index.css">
-  <script src="./roslib.min.js"></script>
-  <script src="./anime.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAISA Web UI</title>
+    <link rel="stylesheet" href="bulma.min.css">
+    <link rel="stylesheet" href="index.css">
 </head>
 
 <body>
-  <nav class="navbar" role="navigation" aria-label="main navigation">
-    <div class="navbar-brand">
-      <a class="navbar-item" href="https://bulma.io">
-        <svg width="640" height="160" viewBox="0 0 640 160" fill="none" xmlns="http://www.w3.org/2000/svg"
-          class="navbar-svgs">
-          <path stroke="#3498db" stroke-width="10" fill="none"
-            d="M10,150 L100,150 L120,40 L140,150 L130,95 L110,95 L109,100 L135,100" fill="red" class="bd-svg-black" />
-          <!-- A -->
-          <path stroke="#3498db" stroke-width="10" fill="none" d="M140,150 L160,40 L180,150 L200,40 L400,40" fill="red"
-            class="bd-svg-black" /> <!-- W -->
-        </svg>
-      </a>
+    <nav class="navbar" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a class="navbar-item" href="https://bulma.io">
+                <svg width="640" height="160" viewBox="0 0 640 160" fill="none" xmlns="http://www.w3.org/2000/svg"
+                    class="navbar-svgs">
+                    <path stroke="#3498db" stroke-width="10" fill="none"
+                        d="M10,150 L100,150 L120,40 L140,150 L130,95 L110,95 L109,100 L135,100" fill="red"
+                        class="bd-svg-black" />
+                    <!-- A -->
+                    <path stroke="#3498db" stroke-width="10" fill="none" d="M140,150 L160,40 L180,150 L200,40 L400,40"
+                        fill="red" class="bd-svg-black" /> <!-- W -->
+                </svg>
+            </a>
 
-      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarBasicExample">
-        <span aria-hidden="true"></span>
-        <span aria-hidden="true"></span>
-        <span aria-hidden="true"></span>
-        <span aria-hidden="true"></span>
-      </a>
-    </div>
+            <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarBasicExample">
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+            </a>
+        </div>
 
-    <div id="navbarBasicExample" class="navbar-menu">
-      <div class="navbar-start">
-        <a class="navbar-item" href="./index.html">
-          Home
-        </a>
-        <a class="navbar-item" href="./ROS_if.html">
-          ROS Interface
-        </a>
-        <a class="navbar-item" href="./ROS_if_imv.html">
-          ROS Image Viewer
-        </a>
-      </div>
-    </div>
-  </nav>
+        <div id="navbarBasicExample" class="navbar-menu">
+            <div class="navbar-start">
+                <a class="navbar-item" href="./index.html">
+                    Home
+                </a>
+                <a class="navbar-item" href="./ROS_if.html">
+                    ROS Interface
+                </a>
+                <a class="navbar-item" href="./ROS_if_imv.html">
+                    ROS Image Viewer
+                </a>
+            </div>
+        </div>
+    </nav>
 
-  <script type="text/javascript" src="index.js">
-  </script>
+    <section class="section">
+        <div class="container">
+            <h1 class="title">RAISA Control Panel</h1>
+
+            <!-- Mode Selection Buttons -->
+            <div class="box">
+                <h2 class="subtitle">Mode Selection</h2>
+                <div class="buttons">
+                    <button id="btn-interaction" class="button is-primary is-large">
+                        <span>Mode Interaksi</span>
+                    </button>
+                    <button id="btn-navigation" class="button is-info is-large">
+                        <span>Mode Navigasi</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Test Section: FSM Case Selection -->
+            <div class="box">
+                <h2 class="subtitle">Test: FSM Case Selection</h2>
+
+                <!-- 12 Button Generator -->
+                <h3 class="subtitle is-5">Button Control</h3>
+                <div class="buttons is-flex is-flex-wrap-wrap" id="btn-group">
+                    <!-- 12 tombol auto-generate via JS -->
+                </div>
+                <p class="help">Publish FSM case untuk testing</p>
+            </div>
+
+            <!-- ...existing UI elements... -->
+        </div>
+    </section>
+
+    <!-- Scripts -->
+    <script src="roslib.min.js"></script>
+    <script src="anime.min.js"></script>
+    <script src="index.js"></script>
 </body>
 
 </html>

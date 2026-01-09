@@ -38,7 +38,7 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.167",
+                "reeman_ros_ip": "10.7.101.172",
                 "min_request_period_speed_ms": 500,
                 "polling_period_ms": 1000,
 
@@ -99,7 +99,7 @@ def generate_launch_description():
         name='master',
         output='screen',
         respawn=True,
-        prefix='nice -n -10',
+        # prefix='nice -n -10',
     )
 
     keyboard_input = Node(
@@ -145,10 +145,42 @@ def generate_launch_description():
         respawn=True,
     )
 
+    hand_track_stop = Node(
+        package='hardware',
+        executable='hand_track.py',
+        name='hand_track_stop',
+        output='screen',
+        respawn=True,
+    )
+
+    uwb_localization = Node(
+        package='hardware',
+        executable='uwb_data_umeyama_method.py',
+        name='uwb_localization',
+        output='screen',
+        respawn=True,
+    )
+
+    dual_leg = Node(
+        package='hardware',
+        executable='dual_leg.py',
+        name='dual_leg',
+        output='log',
+        respawn=True,
+    )
+
     face_detection = Node(
         package='vision',
         executable='face_detection.py',
         name='face_detection',
+        output='screen',
+        respawn=True,
+    )
+
+    convert_csv = Node(
+        package='master',
+        executable='convert_csv',
+        name='convert_csv',
         output='screen',
         respawn=True,
     )
@@ -165,9 +197,12 @@ def generate_launch_description():
 
             # audio_controller,
             
-            # capture,
-            # hand_track,
-            # face_detection,
+            hand_track_stop,
+            uwb_localization,
+            dual_leg,
+
+            # convert_csv,
+
 
             # telemetry,
 
