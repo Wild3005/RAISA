@@ -17,8 +17,17 @@ find_package(rclcpp_action REQUIRED)
 find_package(ros2_interface REQUIRED)
 find_package(ros2_utils REQUIRED)
 
+
+# Install headers if needed later
+install(DIRECTORY include/
+  DESTINATION include/
+)
 # Executable
-add_executable(master src/master.cpp)
+add_executable(master src/master.cpp
+  include/csv_logger.hpp    # header-only, still include to install properly
+)
+
+
 
 ament_target_dependencies(master
   rclcpp
@@ -35,10 +44,6 @@ install(TARGETS master
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install headers if needed later
-install(DIRECTORY include/
-  DESTINATION include/
-)
 
 
 if(BUILD_TESTING)

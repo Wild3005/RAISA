@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 
-#include "ReemanClient.hpp" // header-only HTTP client
+#include "ReemanClient.hpp"
+// #include "ReemanClient.hpp" // header-onlsy HTTP client
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose2_d.hpp>

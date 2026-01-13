@@ -38,10 +38,10 @@ public:
         // optionally set FPS
         cap_.set(cv::CAP_PROP_FPS, 30);
 
-        // verify what actually got applied
-        double actual_width = cap_.get(cv::CAP_PROP_FRAME_WIDTH);
-        double actual_height = cap_.get(cv::CAP_PROP_FRAME_HEIGHT); //
-        double actual_fps = cap_.get(cv::CAP_PROP_FPS);
+        // // verify what actually got applied
+        // double actual_width = cap_.get(cv::CAP_PROP_FRAME_WIDTH);
+        // double actual_height = cap_.get(cv::CAP_PROP_FRAME_HEIGHT); //
+        // double actual_fps = cap_.get(cv::CAP_PROP_FPS);
 
         if (!cap_.isOpened())
         {
@@ -89,7 +89,7 @@ public:
 
         static int count = 0;
         count++;
-        if (count % 6 != 0)
+        if (count % 8 != 0)
             return; // publish every 10th frame
 
         count = 0;

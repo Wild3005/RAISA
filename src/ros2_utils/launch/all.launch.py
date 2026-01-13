@@ -38,7 +38,9 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.2500",
+                "reeman_ros_ip": "10.7.101.173",
+                # "reeman_ros_ip": "192.168.100.221",
+                # "reeman_ros_ip": "10.150.210.3",
                 "min_request_period_speed_ms": 600,
                 "polling_period_ms": 300,
 
@@ -186,6 +188,22 @@ def generate_launch_description():
         respawn=True,
     )
 
+    dual_leg = Node(
+        package='dual_leg',
+        executable='dual_leg_pub.py',
+        name='dual_leg_pub',
+        output='screen',
+        respawn=True,
+    )
+
+    logger_csv = Node(
+        package='vision',
+        executable='logger_csv.py',
+        name='logger_csv',
+        output='screen',
+        respawn=True,
+    )
+
 
     return LaunchDescription(
         [
@@ -202,7 +220,7 @@ def generate_launch_description():
             # hand_track,
             # face_detection,
             # pose_detection,
-            # lidar_processor,
+            # # lidar_processor,
 
             # telemetry,
             pozyx_node,
@@ -211,8 +229,10 @@ def generate_launch_description():
 
             # wifi_control,
             io_reeman_node,
-            # io_leg_node,
+            # logger_csv,
 
-            # ds4_driver,
+            # dual_leg,
+
+            # ds4_driver,p
         ]
     )

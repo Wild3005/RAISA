@@ -3,6 +3,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
 #include "ros2_utils/simple_fsm.hpp"
 #include "ros2_utils/help_logger.hpp"
 #include "ros2_interface/msg/robot.hpp"
@@ -33,6 +34,7 @@ typedef struct
     float pose_x;
     float pose_y;
     float pose_theta;
+    float pose_theta_32_dir;
 
     float vel_linear;
     float vel_angular;
@@ -47,6 +49,10 @@ typedef struct
     int8_t battery_level;
     int8_t charge_flag;
     int8_t emergency_flag;
+
+    float target_nav_pose_x;
+    float target_nav_pose_y;
+    float target_nav_pose_theta;
 
 } robot_t;
 
@@ -84,6 +90,7 @@ typedef struct
     float pose_x;
     float pose_y;
     float pose_theta;
+    float pose_theta_32_dir;
 
     float prev_pose_x;
     float prev_pose_y;
@@ -105,10 +112,12 @@ typedef struct
     float vel_angular;
 
     int8_t mode;
+    int8_t is_detected;
     float distance_to_robot;
     float angle_to_robot;
     float angle_movement;
     float last_angle_movement;
+    int8_t orientation;
 
 } human_info_t;
 
@@ -126,6 +135,7 @@ public:
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_get_lidar_;
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_person_global_position_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_person_distance_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_calibrate_uwb_;
 
     // publisher for ui web
     rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_ui_robot_pose2d_;
@@ -135,6 +145,7 @@ public:
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_human_mode_;
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_robot_fsm_mode_;
     rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_ui_robot_following_mode_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pub_ui_target_nav_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Pose2D>::SharedPtr sub_robot_pose_;
@@ -148,6 +159,8 @@ public:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_point_cloud;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_vision_person_position;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_vision_pose_detected;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_vision_person_orientation;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_dual_leg;
 
     // Timer
     rclcpp::TimerBase::SharedPtr timer_;
@@ -190,6 +203,7 @@ public:
     const float LIDAR_FRONT_CONE_ANGLE = M_PI / 2.0f; // ±45° front cone
 
     int8_t is_move_to_human = 0;
+    bool case6_nav_active = false;
 
     // ============================= Robot Command =============================
     std::string last_robot_command = "";
@@ -223,6 +237,7 @@ public:
         pub_get_lidar_ = this->create_publisher<std_msgs::msg::Int8>("/get/lidar", 1);
         pub_person_global_position_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/person/global_position", 1);
         pub_person_distance_ = this->create_publisher<std_msgs::msg::Float32>("/person/distance", 1);
+        pub_calibrate_uwb_ = this->create_publisher<std_msgs::msg::Float32>("/uwb/calibrate", 1);
 
         // publisher for ui web
         pub_ui_robot_pose2d_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/ui/robot/pose2d", 1);
@@ -232,6 +247,7 @@ public:
         pub_ui_human_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/human/mode", 1);
         pub_ui_robot_fsm_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/robot/fsm_mode", 1);
         pub_ui_robot_following_mode_ = this->create_publisher<std_msgs::msg::Int8>("/ui/robot/following_mode", 1);
+        pub_ui_target_nav_ = this->create_publisher<geometry_msgs::msg::Pose2D>("/ui/target/nav", 1);
 
         // -----------------------------
         // Subscribers
@@ -258,9 +274,14 @@ public:
             "/vision/person_position", 1, std::bind(&MasterNode::callbackVisionPersonPosition, this, std::placeholders::_1), node_options);
         sub_vision_pose_detected = this->create_subscription<std_msgs::msg::Int8>(
             "/vision/pose_detected", 1, std::bind(&MasterNode::callbackVisionPersonDetected, this, std::placeholders::_1), node_options);
+        sub_vision_person_orientation = this->create_subscription<std_msgs::msg::String>(
+            "/vision/person_orientation", 1, std::bind(&MasterNode::callbackVisionPersonOrientation, this, std::placeholders::_1), node_options);
+        sub_dual_leg = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/dual_leg", 1, std::bind(&MasterNode::callbackDualLeg, this, std::placeholders::_1), node_options);
 
         fsm_robot.value = TEST_UWB;
-        fsm_mode.value = MODE_IDLE;
+        // fsm_mode.value = MODE_TRACK_UWB;
+        fsm_mode.value = MODE_TRACK_CAMERA;
 
         // -----------------------------
         // Optional periodic behavior
@@ -280,7 +301,7 @@ public:
         robot.nav_status_res = json_msg["res"];
         robot.nav_status_reason = json_msg["reason"];
 
-        logger.info("Nav Status received: res = %d", robot.nav_status_res);
+        // logger.info("Nav Status received: res = %d", robot.nav_status_res);
     }
 
     void callbackRobotInfo(const ros2_interface::msg::Robot::SharedPtr msg)
@@ -306,6 +327,8 @@ public:
         robot.pose_x = msg->x;
         robot.pose_y = msg->y;
         robot.pose_theta = msg->theta;
+
+        robot.pose_theta_32_dir = angle_to_dir32(msg->theta);
     }
 
     void callbackRobotMode(const std_msgs::msg::Int8::SharedPtr msg)
@@ -352,23 +375,81 @@ public:
             fsm_mode.value = MODE_TRACK_CAMERA;
             break;
         case 4:
+            is_move_to_human = !is_move_to_human;
             break;
         case 5:
+            goTo(robot.pose_x, robot.pose_y, human.pose_theta);
             break;
         case 6:
+        {
+            if (human.mode != -1)
+            {
+                robot.target_nav_pose_x = human.right_pose_x;
+                robot.target_nav_pose_y = human.right_pose_y;
+                robot.target_nav_pose_theta = human.right_pose_theta;
+                goTo(human.right_pose_x, human.right_pose_y, human.right_pose_theta);
+            }
             break;
+        }
         case 7:
+        {
+            if (human.mode != -1)
+            {
+                robot.target_nav_pose_x = human.sit_pose_x;
+                robot.target_nav_pose_y = human.sit_pose_y;
+                robot.target_nav_pose_theta = human.sit_pose_theta;
+                goTo(human.sit_pose_x, human.sit_pose_y, human.sit_pose_theta);
+            }
             break;
+        }
         case 8:
+        {
+            if (human.mode != -1)
+            {
+                robot.target_nav_pose_x = human.offset_pose_x;
+                robot.target_nav_pose_y = human.offset_pose_y;
+                robot.target_nav_pose_theta = human.offset_pose_theta;
+
+                goTo(human.offset_pose_x, human.offset_pose_y, human.offset_pose_theta);
+            }
+            // if (human.mode != -1)
+            // {
+
+            //     if (human.is_sitting)
+            //     {
+            //         goTo(human.sit_pose_x, human.sit_pose_y, human.sit_pose_theta);
+            //     }
+            //     else
+            //     {
+            //         if (human.mode == 0)
+            //         {
+            //             goTo(human.right_pose_x, human.right_pose_y, human.right_pose_theta);
+            //         }
+            //         else
+            //         {
+            //             goTo(human.offset_pose_x, human.offset_pose_y, human.offset_pose_theta);
+            //         }
+            //     }
+            // }
             break;
+        }
         case 9:
+            is_move_to_human = !is_move_to_human;
             break;
         case 10:
             break;
         case 11:
             break;
         case 12:
+        {
+            float delta_robot_uwb_theta = uwb_pose.pose_theta - robot.pose_theta;
+
+            std_msgs::msg::Float32 calibrate_msg;
+            calibrate_msg.data = delta_robot_uwb_theta;
+            pub_calibrate_uwb_->publish(calibrate_msg);
+            logger.info("Calibrate UWB by %.2f radian.", delta_robot_uwb_theta);
             break;
+        }
         default:
             RCLCPP_WARN(this->get_logger(), "Unknown button ID: %d", button_id);
             break;
@@ -381,7 +462,29 @@ public:
     {
         uwb_pose.pose_x = msg->x;
         uwb_pose.pose_y = msg->y;
+
         uwb_pose.pose_theta = msg->theta;
+
+        // mapping theta to 8 directions
+        // uwb_pose.pose_theta = angle_to_dir32(msg->theta);
+    }
+
+    float angle_to_dir32(float theta)
+    {
+        // change from [-pi, pi] to [0, 2pi]
+        theta -= M_PI;
+        theta = std::fmod(theta + 2 * M_PI, 2 * M_PI);
+
+        float shifted = theta + M_PI; // [0, 2pi]
+        int dir = static_cast<int>(shifted / (2 * M_PI) * 32);
+        float res = static_cast<float>(dir % 32) * 11.25f;
+
+        while (res > 180.0f)
+            res -= 360.0f;
+        while (res < -180.0f)
+            res += 360.0f;
+
+        return res; // safety clamp
     }
 
     void callbackVisionPersonPosition(const std_msgs::msg::String::SharedPtr msg)
@@ -392,6 +495,33 @@ public:
     void callbackVisionPersonDetected(const std_msgs::msg::Int8::SharedPtr msg)
     {
         person_detected_ = msg->data;
+    }
+
+    void callbackVisionPersonOrientation(const std_msgs::msg::String::SharedPtr msg)
+    {
+        if (msg->data == "turned_away")
+        {
+            human.orientation = 0;
+        }
+        else
+        {
+            human.orientation = 1;
+        }
+    }
+
+    void callbackDualLeg(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+    {
+        if (msg->data.size() >= 2)
+        {
+            if ((msg->data[1] <= 200))
+            {
+                human.is_sitting = 1;
+            }
+            else
+            {
+                human.is_sitting = 0;
+            }
+        }
     }
 
     void callbackPointCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -447,11 +577,26 @@ public:
         human_velocity_msg.angular.z = human.vel_angular;
         pub_ui_human_velocity_->publish(human_velocity_msg);
         std_msgs::msg::Int8 human_mode_msg;
-        human_mode_msg.data = human.mode;
+        human_mode_msg.data = human.mode; //
+        if (human.is_sitting)
+        {
+            human_mode_msg.data = 2; // sitting mode
+        }
+        if (person_detected_ == 0)
+        {
+            human_mode_msg.data = -1; // not detected
+        }
         pub_ui_human_mode_->publish(human_mode_msg);
         std_msgs::msg::Int8 robot_fsm_mode_msg;
         robot_fsm_mode_msg.data = fsm_mode.value;
         pub_ui_robot_fsm_mode_->publish(robot_fsm_mode_msg);
+        geometry_msgs::msg::Pose2D target_nav_msg;
+        target_nav_msg.x = robot.target_nav_pose_x;
+        target_nav_msg.y = robot.target_nav_pose_y;
+        target_nav_msg.theta = robot.target_nav_pose_theta;
+        pub_ui_target_nav_->publish(target_nav_msg);
+
+        logger.info("fsm: %d | mode: %d", fsm_mode.value, human.mode);
     }
 
     // ============================================================
@@ -481,16 +626,34 @@ public:
         get_human_pose_offset_right();
         get_human_pose_offset_sit();
 
-        human_following();
+        //? AUTO FOLLOW HUMAN
+        if (is_move_to_human)
+        {
+            human_following();
+        }
 
-        logger.info("Robot: %.2f %.2f %.2f | Human: %.2f %.2f %.2f | Mode: %d",
+        logger.info("Robot: %.2f %.2f %.2f | Human: %.2f %.2f %.2f",
                     robot.pose_x, robot.pose_y, robot.pose_theta,
-                    human.pose_x, human.pose_y, human.pose_theta,
-                    human.mode);
+                    human.pose_x, human.pose_y, human.pose_theta);
+
+        if (human.mode == 0)
+        {
+            logger.info("HUMAN IS STANDING");
+        }
+        else if (human.mode == 1)
+        {
+            logger.info("HUMAN IS WALKING");
+        }
+        else if (human.mode == 2)
+        {
+            logger.info("HUMAN IS SITTING");
+        }
+        else if (human.mode == -1)
+        {
+            logger.info("HUMAN NOT DETECTED, SKIP FOLLOWING");
+        }
 
         transmit_data_to_web();
-
-        // logger.info("%.2f %.2f %.2f | %.2f %.2f | %d | %.2f | %.2f", robot.pose_x, robot.pose_y, robot.pose_theta, human.pose_x, human.pose_y, human.mode, human.mode, human.distance_to_robot, human.delta_linear);
     }
 
     void keyboardCommandRoutine()
@@ -579,76 +742,88 @@ public:
     {
         static float last_x = 0.0f;
         static float last_y = 0.0f;
-        static float last_theta = 0.0f;
 
         static float delta_move_x = 0.0f;
         static float delta_move_y = 0.0f;
-        static float delta_move_theta = 0.0f;
 
         static int8_t prev_mode = 0;
-        static int8_t is_person_moving = 0;
+        static int8_t is_person_left_area = 0;
         static int16_t cntr_reentry = 0;
 
         static pose2d_t used_human_pose = {0.0f, 0.0f, 0.0f};
 
         if (human.mode == 0)
         {
+            logger.info("HUMAN IS STANDING");
             used_human_pose.pose_x = human.right_pose_x;
             used_human_pose.pose_y = human.right_pose_y;
             used_human_pose.pose_theta = human.right_pose_theta;
         }
         else if (human.mode == 1)
         {
+            logger.info("HUMAN IS WALKING");
             used_human_pose.pose_x = human.offset_pose_x;
             used_human_pose.pose_y = human.offset_pose_y;
             used_human_pose.pose_theta = human.offset_pose_theta;
         }
         else if (human.mode == 2)
         {
+            logger.info("HUMAN IS SITTING");
             used_human_pose.pose_x = human.sit_pose_x;
             used_human_pose.pose_y = human.sit_pose_y;
             used_human_pose.pose_theta = human.sit_pose_theta;
         }
+        else if (human.mode == -1)
+        {
+            logger.info("HUMAN NOT DETECTED, SKIP FOLLOWING");
+            // cancelNav();
+            return;
+        }
 
         delta_move_x = fabs(used_human_pose.pose_x - last_x);
         delta_move_y = fabs(used_human_pose.pose_y - last_y);
-        delta_move_theta = fabs(used_human_pose.pose_theta - last_theta);
 
-        is_person_moving = (delta_move_x > 1.0f || delta_move_y > 1.0f);
-
-        logger.info("last: %.2f, %.2f", fabs(robot.pose_x - last_x), fabs(robot.pose_y - last_y));
-        logger.info("delta: %.2f, %.2f", delta_move_x, delta_move_y);
+        is_person_left_area = (delta_move_x > 1.0f || delta_move_y > 1.0f);
 
         if (cntr_reentry > 0)
         {
-            logger.info("Reentry counter active: %d", cntr_reentry);
             cntr_reentry--;
             return;
         }
 
-        if (is_person_moving)
+        if (is_person_left_area)
         {
-            if (robot.nav_status_res != 1)
+            if (robot.nav_status_res != 1 || prev_mode != human.mode)
             {
+                logger.info("MOVING TO HUMAN");
+
+                robot.target_nav_pose_x = used_human_pose.pose_x;
+                robot.target_nav_pose_y = used_human_pose.pose_y;
+                robot.target_nav_pose_theta = used_human_pose.pose_theta;
+
                 goTo(used_human_pose.pose_x, used_human_pose.pose_y, used_human_pose.pose_theta);
+
                 last_x = used_human_pose.pose_x;
                 last_y = used_human_pose.pose_y;
-                last_theta = used_human_pose.pose_theta;
-                logger.info("===== right: %.2f, %.2f, %.2f", used_human_pose.pose_x, used_human_pose.pose_y, used_human_pose.pose_theta);
-                cntr_reentry = 30;
+
+                cntr_reentry = 10;
             }
             else
             {
                 if (fabs(robot.pose_x - last_x) < 1.5f && fabs(robot.pose_y - last_y) < 1.5f)
                 {
-                    logger.info("Person is moving and robot is close to last target. Skipping move command.");
+                    logger.info("CANCEL NAV TO HUMAN");
+
                     cancelNav();
-                    cntr_reentry = 10;
+
+                    cntr_reentry = 2;
                 }
             }
         }
 
-        logger.info("%d %d | %d %d | %.2f %.2f", is_person_moving, robot.nav_status_res, human.mode, cntr_reentry, delta_move_x, delta_move_y);
+        prev_mode = human.mode;
+
+        // logger.info("%d %d | %d %d | %.2f %.2f", is_person_moving, robot.nav_status_res, human.mode, cntr_reentry, delta_move_x, delta_move_y);
     }
 
     void get_human_pose_offset_back()
@@ -658,100 +833,49 @@ public:
 
         float dist = std::sqrt(dx * dx + dy * dy);
 
-        if (dist < 1e-3)
+        if (dist > 1.5f)
         {
-            return;
+            if (dist < 1e-3)
+            {
+                return; //
+            }
+            else //
+            {
+                float ux = dx / dist;
+                float uy = dy / dist;
+
+                human.offset_pose_x = human.pose_x + ux * 1.5; //
+                human.offset_pose_y = human.pose_y + uy * 1.5;
+            }
+
+            human.offset_pose_theta = std::atan2(human.pose_y - robot.pose_y, human.pose_x - robot.pose_x);
         }
         else
         {
-            float ux = dx / dist;
-            float uy = dy / dist;
+            human.offset_pose_x = robot.pose_x;
+            human.offset_pose_y = robot.pose_y;
 
-            human.offset_pose_x = human.pose_x + ux * offset_meter;
-            human.offset_pose_y = human.pose_y + uy * offset_meter;
+            human.offset_pose_theta = std::atan2(human.pose_y - robot.pose_y, human.pose_x - robot.pose_x);
         }
-
-        human.offset_pose_theta = std::atan2(human.pose_y - human.offset_pose_y, human.pose_x - human.offset_pose_x);
-        human.offset_pose_theta = human.last_angle_movement;
     }
 
-    // TODO: check this function jika orang diam
     void get_human_pose_offset_right()
     {
-        float angle_right = human.last_angle_movement - M_PI / 2.0f;
+        // float angle_right = human.last_angle_movement - M_PI / 2.0f;
+        float angle_right = human.pose_theta - M_PI / 2.0f;
 
         human.right_pose_x = human.pose_x + 0.8 * std::cos(angle_right);
         human.right_pose_y = human.pose_y + 0.8 * std::sin(angle_right);
-        human.right_pose_theta = human.last_angle_movement;
+        human.right_pose_theta = human.pose_theta;
     }
 
     void get_human_pose_offset_sit()
     {
-        float angle_sit = human.last_angle_movement - M_PI / 2.0f;
+        float angle_sit = human.pose_theta - M_PI / 2.0f;
 
         human.sit_pose_x = human.pose_x + 0.8 * std::cos(angle_sit);
         human.sit_pose_y = human.pose_y + 0.8 * std::sin(angle_sit);
-        human.sit_pose_theta = human.last_angle_movement + (M_PI * 0.5f);
-    }
-
-    void move_to_human_rear()
-    {
-        // get_robot_pose();
-        // std::this_thread::sleep_for(50ms);
-
-        static float prev_x = human.offset_pose_x;
-        static float prev_y = human.offset_pose_y;
-        static float prev_theta = human.offset_pose_theta;
-        float deg_theshold = 30.0f; // degrees
-
-        // Only send goTo command if the target position has changed significantly
-        if (std::fabs(human.offset_pose_x - prev_x) < 1.0f &&
-            std::fabs(human.offset_pose_y - prev_y) < 1.0f
-            // && std::fabs(human.pose_theta - prev_theta) < (deg_theshold * 0.017453293f)g
-        )
-        {
-            logger.info("SKIP move");
-        }
-        else
-        {
-        }
-
-        if (robot.nav_status_res != 1)
-            goTo(human.offset_pose_x, human.offset_pose_y, human.offset_pose_theta);
-
-        prev_x = human.offset_pose_x;
-        prev_y = human.offset_pose_y;
-        prev_theta = human.pose_theta;
-    }
-
-    void move_to_human_right()
-    {
-        // get_robot_pose();
-
-        static float prev_x = human.right_pose_x;
-        static float prev_y = human.right_pose_y;
-        static float prev_theta = human.right_pose_theta;
-
-        float deg_theshold = 30.0f; // degrees
-
-        // Only send goTo command if the target position has changed significantly
-        if (std::fabs(human.right_pose_x - prev_x) < 1.0f &&
-            std::fabs(human.right_pose_y - prev_y) < 1.0f
-            // && std::fabs(human.right_pose_theta - prev_theta) < (deg_theshold * 0.017453293f)
-        )
-        {
-            logger.info("SKIP move");
-        }
-        else
-        {
-        }
-
-        if (robot.nav_status_res != 1)
-            goTo(human.right_pose_x, human.right_pose_y, human.right_pose_theta);
-
-        prev_x = human.right_pose_x;
-        prev_y = human.right_pose_y;
-        prev_theta = human.right_pose_theta;
+        human.sit_pose_theta = human.pose_theta + (M_PI * 0.25f);
     }
 
     void process_lidar()
@@ -889,6 +1013,7 @@ public:
         {
             if (obstacle_middle.status && vision_person_position_ == "middle")
             {
+
                 obs_used = obstacle_middle;
             }
             else if (obstacle_left.status && vision_person_position_ == "left")
@@ -913,11 +1038,14 @@ public:
             }
             get_human_from_lidar(obs_used);
         }
+        else
+        {
+            human.mode = -1; // no person detected
+        }
     }
 
     void get_human_from_lidar(obstacle_checking_t obs_used)
     {
-        static int8_t prev_obs_status = 0;
 
         if (obs_used.status)
         {
@@ -935,23 +1063,32 @@ public:
 
             human.pose_x = robot.pose_x + dx;
             human.pose_y = robot.pose_y + dy;
-            human.pose_theta = std::atan2(dy, dx);
+
+            float angle_to_human = human.orientation == 1 ? std::atan2(dy, dx) + M_PI : std::atan2(dy, dx);
+
+            while (angle_to_human > M_PI)
+                angle_to_human -= 2.0f * M_PI;
+            while (angle_to_human < -M_PI)
+                angle_to_human += 2.0f * M_PI;
+
+            human.pose_theta = angle_to_human;
 
             human.distance_to_robot = std::sqrt(dx * dx + dy * dy);
             human.angle_to_robot = std::atan2(dy, dx);
-            human.mode = 1;
 
             if (fabs(human.pose_x - human.prev_pose_x) > 0.2 || fabs(human.pose_y - human.prev_pose_y) > 0.2)
             {
                 human.delta_linear = std::sqrt(std::pow(human.pose_x - human.prev_pose_x, 2) + std::pow(human.pose_y - human.prev_pose_y, 2)); // assuming callback every 500ms
                 human.angle_movement = (std::atan2(human.pose_y - human.prev_pose_y, human.pose_x - human.prev_pose_x));
                 human.last_angle_movement = human.angle_movement;
-                logger.info("====== Significant LIDAR movement detected ========.");
+
+                human.mode = 1;
             }
             else
             {
                 human.delta_linear = 0.0f;
                 human.angle_movement = 0.0f;
+
                 human.mode = 0;
             }
         }
@@ -961,10 +1098,10 @@ public:
             human.mode = -1;
         }
 
-        logger.info("LIDAR: %.2f, %.2f, %.2f | Distance: %.2f m",
-                    human.pose_x, human.pose_y, human.pose_theta, human.distance_to_robot);
-
-        prev_obs_status = obs_used.status;
+        if (human.is_sitting)
+        {
+            human.mode = 2;
+        }
     }
 
     void get_human_from_uwb()
@@ -977,6 +1114,8 @@ public:
         human.pose_y = uwb_pose.pose_y;
         human.pose_theta = uwb_pose.pose_theta;
 
+        human.pose_theta_32_dir = angle_to_dir32(human.pose_theta);
+
         human.distance_to_robot = std::sqrt(std::pow(human.pose_x - robot.pose_x, 2) + std::pow(human.pose_y - robot.pose_y, 2));
         human.angle_to_robot = std::atan2(human.pose_y - robot.pose_y, human.pose_x - robot.pose_x);
 
@@ -984,15 +1123,21 @@ public:
         {
             human.delta_linear = std::sqrt(std::pow(human.pose_x - human.prev_pose_x, 2) + std::pow(human.pose_y - human.prev_pose_y, 2)); // assuming callback every 500ms
             human.angle_movement = (std::atan2(human.pose_y - human.prev_pose_y, human.pose_x - human.prev_pose_x));
-            human.mode = 1;
             human.last_angle_movement = human.angle_movement;
-            logger.info("====== Significant UWB movement detected ========.");
+
+            human.mode = 1;
         }
         else
         {
             human.delta_linear = 0.0f;
             human.angle_movement = 0.0f;
+
             human.mode = 0;
+        }
+
+        if (human.is_sitting)
+        {
+            human.mode = 2;
         }
 
         // logger.info("__UWB: %.2f, %.2f, %.2f | Distance: %.2f m",

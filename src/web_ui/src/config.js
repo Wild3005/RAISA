@@ -166,6 +166,8 @@ robotPoseSub.subscribe(msg => {
     updateFloat("robot_x", msg.x);
     updateFloat("robot_y", msg.y);
     updateFloat("robot_th", msg.theta);
+
+    console.log(msg);
 });
 
 var robotModeSub = new ROSLIB.Topic({

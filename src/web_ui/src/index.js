@@ -123,27 +123,27 @@ for (let i = 1; i <= 12; i++) {
 
     btnGroup.appendChild(btn);
 }
-
+pose_detection_nur;
 // ============================
 // SEND DATA TO ROS2
 // ============================
 function sendCommandButton(btnId) {
-    // Contoh payload: [button_id, timestamp_mod_127]
-    // send Int8 data
-    const payload = new ROSLIB.Message({
-        data: btnId,
-    });
+  // Contoh payload: [button_id, timestamp_mod_127]
+  // send Int8 data
+  const payload = new ROSLIB.Message({
+    data: btnId,
+  });
 
-    button_control_pub.publish(payload);
+  button_control_pub.publish(payload);
 
-    console.log("📤 Sent:", payload.data);
+  console.log("📤 Sent:", payload.data);
 }
 
-// const stdout1 = document.getElementById("stdout1");
-// stdout1.src =
-//   "http://" +
-//   window.location.hostname +
-//   ":8080/stream?topic=" +
-//   "/vision/pose_frame" +
-//   "&quality=10";
-// stdout1.alt = "MJPEG Stream";
+const stdout1 = document.getElementById("stdout1");
+stdout1.src =
+  "http://" +
+  window.location.hostname +
+  ":8080/stream?topic=" +
+  "/vision/image_raw" +
+  "&quality=10";
+stdout1.alt = "MJPEG Stream";
