@@ -206,9 +206,9 @@ var humanPoseSub = new ROSLIB.Topic({
 });
 
 humanPoseSub.subscribe(msg => {
-    updateFloat("human_x", msg.x);
-    updateFloat("human_y", msg.y);
-    updateFloat("human_th", msg.theta);
+  updateFloat("human_x", msg.x);
+  updateFloat("human_y", msg.y);
+  updateFloat("human_th", msg.theta);
 });
 var humanVelSub = new ROSLIB.Topic({
     ros: ros,

@@ -38,7 +38,7 @@ def generate_launch_description():
         name='io_reeman_node',
         parameters=[
             {
-                "reeman_ros_ip": "10.7.101.173",
+                "reeman_ros_ip": "10.7.101.237",
                 # "reeman_ros_ip": "192.168.100.221",
                 # "reeman_ros_ip": "10.150.210.3",
                 "min_request_period_speed_ms": 600,
@@ -220,7 +220,7 @@ def generate_launch_description():
             # hand_track,
             # face_detection,
             # pose_detection,
-            # # lidar_processor,
+            # lidar_processor,
 
             # telemetry,
             pozyx_node,
@@ -229,9 +229,9 @@ def generate_launch_description():
 
             # wifi_control,
             io_reeman_node,
-            # logger_csv,
+            logger_csv,
 
-            # dual_leg,
+            dual_leg,
 
             # ds4_driver,p
         ]

@@ -13,8 +13,8 @@ import os
 
 class PoseDetectorNode(Node):
     # Detection parameters
-    MIN_DETECTION_CONFIDENCE = 0.5
-    MIN_TRACKING_CONFIDENCE = 0.5
+    MIN_DETECTION_CONFIDENCE = 0.75
+    MIN_TRACKING_CONFIDENCE = 0.6
     TIMER_INTERVAL = 0.1  
     
     # Posture detection thresholds
@@ -41,7 +41,8 @@ class PoseDetectorNode(Node):
         self.pub_pose_detected = self.create_publisher(Int8, '/vision/pose_detected', 1)
         self.pub_position = self.create_publisher(String, '/vision/person_position', 1)
         self.pub_orientation = self.create_publisher(String, '/vision/person_orientation', 1)
-        
+        self.pub_pose_framae = self.create_publisher(Image, '/vision/pose_frame', 1)
+
         # === Subscriptions ===
         self.create_subscription(Image, '/vision/image_raw', self.image_callback, 1)
         
@@ -358,6 +359,11 @@ class PoseDetectorNode(Node):
         orientation_msg = String()
         orientation_msg.data = self.current_orientation
         self.pub_orientation.publish(orientation_msg)
+
+        # Publish annotated frame
+        if self.last_frame is not None:
+            pose_frame_msg = self.bridge.cv2_to_imgmsg(self.last_frame, "bgr8")
+            self.pub_pose_framae.publish(pose_frame_msg)
     
     # === CLEANUP ===
     def destroy_node(self):

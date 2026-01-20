@@ -123,7 +123,7 @@ for (let i = 1; i <= 12; i++) {
 
     btnGroup.appendChild(btn);
 }
-pose_detection_nur;
+// pose_detection_nur;
 // ============================
 // SEND DATA TO ROS2
 // ============================
@@ -139,11 +139,15 @@ function sendCommandButton(btnId) {
   console.log("📤 Sent:", payload.data);
 }
 
+console.log("🚀 Web UI Loaded");
+
 const stdout1 = document.getElementById("stdout1");
+
 stdout1.src =
   "http://" +
   window.location.hostname +
   ":8080/stream?topic=" +
-  "/vision/image_raw" +
-  "&quality=10";
+  "/vision/pose_frame" +
+  "&quality=40";
+
 stdout1.alt = "MJPEG Stream";
